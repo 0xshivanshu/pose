@@ -38,9 +38,9 @@ public class PoseLandmarkerHelper {
             PoseLandmarker.PoseLandmarkerOptions options = PoseLandmarker.PoseLandmarkerOptions.builder()
                     .setBaseOptions(baseOptionsBuilder.build())
                     .setRunningMode(RunningMode.LIVE_STREAM)
-                    .setMinPoseDetectionConfidence(0.5f)
-                    .setMinPosePresenceConfidence(0.5f)
-                    .setMinTrackingConfidence(0.5f)
+                    .setMinPoseDetectionConfidence(0.7f)
+                    .setMinPosePresenceConfidence(0.7f)
+                    .setMinTrackingConfidence(0.7f)
                     .setResultListener(this::returnLivestreamResult)
                     .setErrorListener(error -> listener.onError(error.getMessage()))
                     .build();

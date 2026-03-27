@@ -4,12 +4,13 @@ plugins {
 
 android {
     namespace = "com.example.pose"
-    compileSdk = 36
+    // Reverted to API 35 (Stable) as we downgraded to stable androidx libraries
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.pose"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -28,6 +29,15 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    packaging {
+        jniLibs {
+            // Fix for 16 KB page size compatibility with MediaPipe native libraries.
+            // This forces native libraries to be extracted on the device,
+            // avoiding the alignment issue in the APK on newer 16 KB devices.
+            useLegacyPackaging = true
+        }
     }
 }
 

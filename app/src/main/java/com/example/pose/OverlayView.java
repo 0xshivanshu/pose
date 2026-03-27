@@ -13,6 +13,10 @@ import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
 import com.google.mediapipe.tasks.components.containers.Connection;
 import java.util.List;
 
+/**
+ * Custom view for rendering Pose Landmarker results.
+ * Draws a skeleton (connections) and joints (points) over the camera preview.
+ */
 public class OverlayView extends View {
     private PoseLandmarkerResult results;
     private Paint linePaint;
@@ -28,14 +32,16 @@ public class OverlayView extends View {
     private void initPaints() {
         linePaint = new Paint();
         linePaint.setColor(Color.CYAN);
-        linePaint.setStrokeWidth(12F);
+        linePaint.setStrokeWidth(6F); // Decreased from 12F for a cleaner look
         linePaint.setStyle(Paint.Style.STROKE);
         linePaint.setStrokeCap(Paint.Cap.ROUND);
+        linePaint.setAntiAlias(true);
 
         pointPaint = new Paint();
         pointPaint.setColor(Color.YELLOW);
-        pointPaint.setStrokeWidth(16F);
+        pointPaint.setStrokeWidth(8F); // Decreased from 16F
         pointPaint.setStyle(Paint.Style.FILL);
+        pointPaint.setAntiAlias(true);
     }
 
     public void setResults(PoseLandmarkerResult results, int imageWidth, int imageHeight) {
@@ -50,13 +56,15 @@ public class OverlayView extends View {
         super.onDraw(canvas);
         if (results == null || results.landmarks().isEmpty()) return;
 
-        // Calculate scaling to fit the image into the view while maintaining aspect ratio
+        // Calculate scaling to fit the image into the view
         float scaleX = (float) getWidth() / imageWidth;
         float scaleY = (float) getHeight() / imageHeight;
-        float scale = Math.max(scaleX, scaleY); // Matches CenterCrop behavior
+        float scale = Math.max(scaleX, scaleY);
 
         float offsetX = (getWidth() - imageWidth * scale) / 2f;
         float offsetY = (getHeight() - imageHeight * scale) / 2f;
+
+        float minVisibility = 0.5f;
 
         for (List<NormalizedLandmark> landmarks : results.landmarks()) {
             // 1. Draw Skeleton Connections
@@ -64,22 +72,27 @@ public class OverlayView extends View {
                 NormalizedLandmark start = landmarks.get(connection.start());
                 NormalizedLandmark end = landmarks.get(connection.end());
 
-                canvas.drawLine(
-                        start.x() * imageWidth * scale + offsetX,
-                        start.y() * imageHeight * scale + offsetY,
-                        end.x() * imageWidth * scale + offsetX,
-                        end.y() * imageHeight * scale + offsetY,
-                        linePaint
-                );
+                if (start.visibility().orElse(0f) > minVisibility && end.visibility().orElse(0f) > minVisibility) {
+                    canvas.drawLine(
+                            start.x() * imageWidth * scale + offsetX,
+                            start.y() * imageHeight * scale + offsetY,
+                            end.x() * imageWidth * scale + offsetX,
+                            end.y() * imageHeight * scale + offsetY,
+                            linePaint
+                    );
+                }
             }
 
             // 2. Draw Joint Points
             for (NormalizedLandmark landmark : landmarks) {
-                canvas.drawPoint(
-                        landmark.x() * imageWidth * scale + offsetX,
-                        landmark.y() * imageHeight * scale + offsetY,
-                        pointPaint
-                );
+                if (landmark.visibility().orElse(0f) > minVisibility) {
+                    canvas.drawCircle(
+                            landmark.x() * imageWidth * scale + offsetX,
+                            landmark.y() * imageHeight * scale + offsetY,
+                            5f, // Decreased point radius from 8f
+                            pointPaint
+                    );
+                }
             }
         }
     }
