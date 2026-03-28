@@ -4,11 +4,14 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.Matrix;
 import android.os.Bundle;
 import android.os.SystemClock;
+import android.speech.tts.TextToSpeech;
 import android.util.Log;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -33,12 +36,13 @@ import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends AppCompatActivity implements PoseLandmarkerHelper.LandmarkerListener {
+public class MainActivity extends AppCompatActivity implements PoseLandmarkerHelper.LandmarkerListener, TextToSpeech.OnInitListener {
     private static final String TAG = "MainActivity";
     private static final int REQUEST_CODE_PERMISSIONS = 10;
     private static final String[] REQUIRED_PERMISSIONS = {Manifest.permission.CAMERA};
@@ -54,6 +58,10 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private PoseLandmarkerHelper poseLandmarkerHelper;
     private RepCounter repCounter;
     private ExecutorService cameraExecutor;
+    private TextToSpeech tts;
+    private boolean isTtsInitialized = false;
+    private long lastFeedbackTime = 0;
+    private static final long FEEDBACK_COOLDOWN_MS = 3000;
 
     // Session Management
     private long sessionStartTime = 0;
@@ -66,7 +74,10 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Handle Window Insets to bring the app screen below the notification bar
+        // Keep the screen on while the app is active
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        // Handle Window Insets
         View mainView = findViewById(R.id.main);
         ViewCompat.setOnApplyWindowInsetsListener(mainView, (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -84,7 +95,24 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
 
         btnEndSession.setOnClickListener(v -> onSessionComplete());
 
+        // Initialize TextToSpeech
+        tts = new TextToSpeech(this, this);
+
         repCounter = new RepCounter();
+        // Voice feedback listener
+        repCounter.setRepListener((exercise, count) -> {
+            speak(exercise + " " + count);
+        });
+
+        // Form feedback listener
+        repCounter.setFormListener(feedback -> {
+            long currentTime = SystemClock.elapsedRealtime();
+            if (currentTime - lastFeedbackTime > FEEDBACK_COOLDOWN_MS) {
+                speak(feedback);
+                lastFeedbackTime = currentTime;
+            }
+        });
+
         poseLandmarkerHelper = new PoseLandmarkerHelper(this, this);
         cameraExecutor = Executors.newSingleThreadExecutor();
 
@@ -93,6 +121,26 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
             startSession();
         } else {
             ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS);
+        }
+    }
+
+    private void speak(String text) {
+        if (isTtsInitialized && tts != null) {
+            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null);
+        }
+    }
+
+    @Override
+    public void onInit(int status) {
+        if (status == TextToSpeech.SUCCESS) {
+            int result = tts.setLanguage(Locale.US);
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                Log.e(TAG, "Language not supported");
+            } else {
+                isTtsInitialized = true;
+            }
+        } else {
+            Log.e(TAG, "TTS Initialization failed");
         }
     }
 
@@ -177,16 +225,55 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                 List<NormalizedLandmark> landmarks = result.landmarks().get(0);
                 
                 checkHandsAboveHeadGesture(landmarks);
+                checkRestGestures(landmarks);
 
-                // Let RepCounter handle multiple exercises autonomously
                 repCounter.processLandmarks(landmarks);
                 
-                // Update UI display
                 tvCount.setText(String.valueOf(repCounter.getTotalReps()));
-                String exercise = repCounter.getLastDetectedExercise();
-                tvExercise.setText(exercise.isEmpty() ? "Detecting..." : exercise);
+                if (repCounter.isResting()) {
+                    tvExercise.setText("RESTING...");
+                    tvExercise.setTextColor(Color.YELLOW);
+                } else {
+                    String exercise = repCounter.getLastDetectedExercise();
+                    tvExercise.setText(exercise.isEmpty() ? "Detecting..." : exercise);
+                    tvExercise.setTextColor(Color.WHITE);
+                }
             }
         });
+    }
+
+    private void checkRestGestures(List<NormalizedLandmark> landmarks) {
+        if (landmarks.size() < 33) return;
+
+        // Using Right Hand landmarks (16=wrist, 18=pinky, 20=index, 22=thumb)
+        NormalizedLandmark rightWrist = landmarks.get(16);
+        NormalizedLandmark rightShoulder = landmarks.get(12);
+        NormalizedLandmark rightIndex = landmarks.get(20);
+        NormalizedLandmark rightThumb = landmarks.get(22);
+        NormalizedLandmark rightPinky = landmarks.get(18);
+
+        // Visibility check
+        if (rightWrist.visibility().orElse(0f) < 0.5f) return;
+
+        boolean handRaised = rightWrist.y() < rightShoulder.y();
+
+        // REST: Palm showing (Fingers spread)
+        // Check horizontal distance between pinky and index finger
+        boolean palmOpen = Math.abs(rightIndex.x() - rightPinky.x()) > 0.05f;
+
+        if (handRaised && palmOpen && !repCounter.isResting()) {
+            repCounter.setResting(true);
+            speak("Resting");
+        } 
+        
+        // RESUME: Thumbs up
+        // Thumb is significantly higher than index finger
+        boolean thumbsUp = rightThumb.y() < (rightIndex.y() - 0.04f);
+        
+        if (handRaised && thumbsUp && repCounter.isResting()) {
+            repCounter.setResting(false);
+            speak("Resuming");
+        }
     }
 
     private void checkHandsAboveHeadGesture(List<NormalizedLandmark> landmarks) {
@@ -200,13 +287,11 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         NormalizedLandmark leftShoulder = landmarks.get(11);
         NormalizedLandmark rightShoulder = landmarks.get(12);
 
-        // Visibility check for gesture
         if (leftWrist.visibility().orElse(0f) < 0.5f || rightWrist.visibility().orElse(0f) < 0.5f) {
             resetGestureFeedback();
             return;
         }
 
-        // Gesture: Both wrists significantly above both shoulders (y is smaller at top)
         boolean handsUp = leftWrist.y() < (leftShoulder.y() - 0.1f) && 
                          rightWrist.y() < (rightShoulder.y() - 0.1f);
 
@@ -265,6 +350,10 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     protected void onDestroy() {
         super.onDestroy();
         isSessionActive = false;
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
+        }
         cameraExecutor.shutdown();
         if (poseLandmarkerHelper != null) {
             poseLandmarkerHelper.close();
