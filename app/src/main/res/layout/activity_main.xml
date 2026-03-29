@@ -27,6 +27,37 @@
         app:layout_constraintStart_toStartOf="@id/viewFinder"
         app:layout_constraintTop_toTopOf="@id/viewFinder" />
 
+    <!-- Debug Overlay -->
+    <LinearLayout
+        android:id="@+id/debugOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:background="#80000000"
+        android:orientation="vertical"
+        android:padding="8dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/headerLayout">
+
+        <TextView
+            android:id="@+id/tvDebugAngles"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Angles: L: -- R: --"
+            android:textColor="#00FF00"
+            android:textSize="12sp"
+            android:fontFamily="monospace"/>
+
+        <TextView
+            android:id="@+id/tvDebugYValues"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Y: S:-- W:--"
+            android:textColor="#00FF00"
+            android:textSize="12sp"
+            android:fontFamily="monospace"/>
+    </LinearLayout>
+
     <!-- Modern Header UI -->
     <LinearLayout
         android:id="@+id/headerLayout"

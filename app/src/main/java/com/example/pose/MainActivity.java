@@ -51,6 +51,8 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private OverlayView overlayView;
     private TextView tvCount;
     private TextView tvExercise;
+    private TextView tvDebugAngles;
+    private TextView tvDebugYValues;
     private Button btnEndSession;
     private View gestureFeedbackCard;
     private ProgressBar gestureProgressBar;
@@ -89,6 +91,8 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         overlayView = findViewById(R.id.overlayView);
         tvCount = findViewById(R.id.tvCount);
         tvExercise = findViewById(R.id.tvExercise);
+        tvDebugAngles = findViewById(R.id.tvDebugAngles);
+        tvDebugYValues = findViewById(R.id.tvDebugYValues);
         btnEndSession = findViewById(R.id.btnEndSession);
         gestureFeedbackCard = findViewById(R.id.gestureFeedbackCard);
         gestureProgressBar = findViewById(R.id.gestureProgressBar);
@@ -229,14 +233,28 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
 
                 repCounter.processLandmarks(landmarks);
                 
-                tvCount.setText(String.valueOf(repCounter.getTotalReps()));
                 if (repCounter.isResting()) {
                     tvExercise.setText("RESTING...");
                     tvExercise.setTextColor(Color.YELLOW);
+                    tvCount.setText("0"); // Or keep previous, but 0 is clearer for a new start
                 } else {
                     String exercise = repCounter.getLastDetectedExercise();
                     tvExercise.setText(exercise.isEmpty() ? "Detecting..." : exercise);
                     tvExercise.setTextColor(Color.WHITE);
+                    tvCount.setText(String.valueOf(repCounter.getLastExerciseCount()));
+                }
+
+                // Debug Info: Angles and Y values
+                if (landmarks.size() >= 33) {
+                    // Physical Right arm flare angle (indices 23, 11, 13)
+                    double rAngle = ExerciseUtils.calculateAngle(landmarks.get(23), landmarks.get(11), landmarks.get(13));
+                    // Physical Left arm flare angle (indices 24, 12, 14)
+                    double lAngle = ExerciseUtils.calculateAngle(landmarks.get(24), landmarks.get(12), landmarks.get(14));
+                    tvDebugAngles.setText(String.format(Locale.US, "Arm-Torso Angles: L:%.1f° R:%.1f°", lAngle, rAngle));
+
+                    tvDebugYValues.setText(String.format(Locale.US, "Y Pos: LS:%.2f LW:%.2f | RS:%.2f RW:%.2f", 
+                        landmarks.get(12).y(), landmarks.get(16).y(), // Left side (Physical)
+                        landmarks.get(11).y(), landmarks.get(15).y())); // Right side (Physical)
                 }
             }
         });
@@ -245,34 +263,44 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private void checkRestGestures(List<NormalizedLandmark> landmarks) {
         if (landmarks.size() < 33) return;
 
-        // Using Right Hand landmarks (16=wrist, 18=pinky, 20=index, 22=thumb)
-        NormalizedLandmark rightWrist = landmarks.get(16);
-        NormalizedLandmark rightShoulder = landmarks.get(12);
-        NormalizedLandmark rightIndex = landmarks.get(20);
-        NormalizedLandmark rightThumb = landmarks.get(22);
-        NormalizedLandmark rightPinky = landmarks.get(18);
+        // MP Indices: Mirrored view
+        // Physical Right: Shoulder(11), Elbow(13), Wrist(15), Hip(23)
+        // Physical Left: Shoulder(12), Elbow(14), Wrist(16), Hip(24)
+        NormalizedLandmark lShoulder = landmarks.get(11); // Phys R
+        NormalizedLandmark rShoulder = landmarks.get(12); // Phys L
+        NormalizedLandmark lWrist = landmarks.get(15);
+        NormalizedLandmark rWrist = landmarks.get(16);
+        NormalizedLandmark lElbow = landmarks.get(13);
+        NormalizedLandmark rElbow = landmarks.get(14);
 
         // Visibility check
-        if (rightWrist.visibility().orElse(0f) < 0.5f) return;
+        if (lWrist.visibility().orElse(0f) < 0.5f || rWrist.visibility().orElse(0f) < 0.5f ||
+            lShoulder.visibility().orElse(0f) < 0.5f || rShoulder.visibility().orElse(0f) < 0.5f) return;
 
-        boolean handRaised = rightWrist.y() < rightShoulder.y();
+        // REST GESTURE: Criss-cross across chest
+        // Phys Right hand (MP 15) on Phys Left Shoulder (MP 12)
+        // Phys Left hand (MP 16) on Phys Right Shoulder (MP 11)
+        double distRightHandToLeftShoulder = Math.sqrt(Math.pow(lWrist.x() - rShoulder.x(), 2) + Math.pow(lWrist.y() - rShoulder.y(), 2));
+        double distLeftHandToRightShoulder = Math.sqrt(Math.pow(rWrist.x() - lShoulder.x(), 2) + Math.pow(rWrist.y() - lShoulder.y(), 2));
 
-        // REST: Palm showing (Fingers spread)
-        // Check horizontal distance between pinky and index finger
-        boolean palmOpen = Math.abs(rightIndex.x() - rightPinky.x()) > 0.05f;
-
-        if (handRaised && palmOpen && !repCounter.isResting()) {
+        if (distRightHandToLeftShoulder < 0.15f && distLeftHandToRightShoulder < 0.15f && !repCounter.isResting()) {
             repCounter.setResting(true);
             speak("Resting");
         } 
         
-        // RESUME: Thumbs up
-        // Thumb is significantly higher than index finger
-        boolean thumbsUp = rightThumb.y() < (rightIndex.y() - 0.04f);
-        
-        if (handRaised && thumbsUp && repCounter.isResting()) {
-            repCounter.setResting(false);
-            speak("Resuming");
+        // RESUME: Exactly one hand raised (wrist and elbow above shoulder)
+        if (repCounter.isResting()) {
+            // Physical Right Side (Mirrored Left indices: 15, 13, 11)
+            boolean rRaised = lWrist.y() < lShoulder.y() && lElbow.y() < lShoulder.y();
+            
+            // Physical Left Side (Mirrored Right indices: 16, 14, 12)
+            boolean lRaised = rWrist.y() < rShoulder.y() && rElbow.y() < rShoulder.y();
+
+            // XOR: Only one hand raised to resume (avoids conflict with session end gesture)
+            if (rRaised ^ lRaised) {
+                repCounter.setResting(false);
+                speak("Resuming");
+            }
         }
     }
 

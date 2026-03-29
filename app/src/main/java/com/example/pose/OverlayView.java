@@ -32,14 +32,14 @@ public class OverlayView extends View {
     private void initPaints() {
         linePaint = new Paint();
         linePaint.setColor(Color.CYAN);
-        linePaint.setStrokeWidth(6F); // Decreased from 12F for a cleaner look
+        linePaint.setStrokeWidth(6F);
         linePaint.setStyle(Paint.Style.STROKE);
         linePaint.setStrokeCap(Paint.Cap.ROUND);
         linePaint.setAntiAlias(true);
 
         pointPaint = new Paint();
         pointPaint.setColor(Color.YELLOW);
-        pointPaint.setStrokeWidth(8F); // Decreased from 16F
+        pointPaint.setStrokeWidth(8F);
         pointPaint.setStyle(Paint.Style.FILL);
         pointPaint.setAntiAlias(true);
     }
@@ -48,7 +48,7 @@ public class OverlayView extends View {
         this.results = results;
         this.imageWidth = imageWidth;
         this.imageHeight = imageHeight;
-        invalidate(); // Force a redraw on the UI thread
+        invalidate();
     }
 
     @Override
@@ -56,7 +56,6 @@ public class OverlayView extends View {
         super.onDraw(canvas);
         if (results == null || results.landmarks().isEmpty()) return;
 
-        // Calculate scaling to fit the image into the view
         float scaleX = (float) getWidth() / imageWidth;
         float scaleY = (float) getHeight() / imageHeight;
         float scale = Math.max(scaleX, scaleY);
@@ -69,6 +68,9 @@ public class OverlayView extends View {
         for (List<NormalizedLandmark> landmarks : results.landmarks()) {
             // 1. Draw Skeleton Connections
             for (Connection connection : PoseLandmarker.POSE_LANDMARKS) {
+                // Filter out face connections (landmarks 0-10)
+                if (connection.start() <= 10 || connection.end() <= 10) continue;
+
                 NormalizedLandmark start = landmarks.get(connection.start());
                 NormalizedLandmark end = landmarks.get(connection.end());
 
@@ -84,12 +86,16 @@ public class OverlayView extends View {
             }
 
             // 2. Draw Joint Points
-            for (NormalizedLandmark landmark : landmarks) {
+            for (int i = 0; i < landmarks.size(); i++) {
+                // Filter out face points (0-10)
+                if (i <= 10) continue;
+
+                NormalizedLandmark landmark = landmarks.get(i);
                 if (landmark.visibility().orElse(0f) > minVisibility) {
                     canvas.drawCircle(
                             landmark.x() * imageWidth * scale + offsetX,
                             landmark.y() * imageHeight * scale + offsetY,
-                            5f, // Decreased point radius from 8f
+                            5f,
                             pointPaint
                     );
                 }

@@ -1,5 +1,6 @@
 package com.example.pose;
 
+import android.os.SystemClock;
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
 import java.util.HashMap;
 import java.util.List;
@@ -10,9 +11,13 @@ public class RepCounter {
 
     private final Map<String, Integer> counts = new HashMap<>();
     private final Map<String, State> states = new HashMap<>();
+    private final Map<String, Boolean> repCompletedInSet = new HashMap<>();
     private String lastDetectedExercise = "";
     private int totalReps = 0;
     private boolean isResting = false;
+    private long resumeTime = 0;
+    private static final long RESUME_COOLDOWN_MS = 1500; // Ignore reps for 1.5s after resuming
+
     private RepListener repListener;
     private FormListener formListener;
     
@@ -44,6 +49,10 @@ public class RepCounter {
         states.put(BICEP_CURL_LEFT, State.IDLE);
         states.put(BICEP_CURL_RIGHT, State.IDLE);
         states.put(SQUAT, State.IDLE);
+
+        repCompletedInSet.put(BICEP_CURL_LEFT, false);
+        repCompletedInSet.put(BICEP_CURL_RIGHT, false);
+        repCompletedInSet.put(SQUAT, false);
     }
 
     public boolean isResting() {
@@ -57,17 +66,33 @@ public class RepCounter {
             states.put(BICEP_CURL_LEFT, State.IDLE);
             states.put(BICEP_CURL_RIGHT, State.IDLE);
             states.put(SQUAT, State.IDLE);
+        } else {
+            // After resting state, go back to "detecting" mode
+            resumeTime = SystemClock.elapsedRealtime();
+            lastDetectedExercise = "";
+            repCompletedInSet.put(BICEP_CURL_LEFT, false);
+            repCompletedInSet.put(BICEP_CURL_RIGHT, false);
+            repCompletedInSet.put(SQUAT, false);
+            
+            // Force reset states to IDLE to prevent the "lowering arm" gesture from triggering a rep
+            states.put(BICEP_CURL_LEFT, State.IDLE);
+            states.put(BICEP_CURL_RIGHT, State.IDLE);
+            states.put(SQUAT, State.IDLE);
         }
     }
 
     public void processLandmarks(List<NormalizedLandmark> landmarks) {
         if (isResting || landmarks.size() < 33) return;
 
-        // Swapping indices to correct mirrored view:
-        // Physical Right (mirrored Left) uses Landmark indices 11, 13, 15, 23
+        // Skip processing for a short duration after resume to avoid counting the arm-lowering movement
+        if (SystemClock.elapsedRealtime() - resumeTime < RESUME_COOLDOWN_MS) {
+            return;
+        }
+
+        // Physical Right (mirrored Left) indices: 11, 13, 15, 23
         processBicepCurl(landmarks.get(11), landmarks.get(13), landmarks.get(15), landmarks.get(23), BICEP_CURL_RIGHT);
         
-        // Physical Left (mirrored Right) uses Landmark indices 12, 14, 16, 24
+        // Physical Left (mirrored Right) indices: 12, 14, 16, 24
         processBicepCurl(landmarks.get(12), landmarks.get(14), landmarks.get(16), landmarks.get(24), BICEP_CURL_LEFT);
         
         processSquat(landmarks.get(23), landmarks.get(25), landmarks.get(27), SQUAT);
@@ -76,23 +101,23 @@ public class RepCounter {
     private void processBicepCurl(NormalizedLandmark s, NormalizedLandmark e, NormalizedLandmark w, NormalizedLandmark h, String exercise) {
         if (s.visibility().orElse(0f) < 0.85f || e.visibility().orElse(0f) < 0.85f || w.visibility().orElse(0f) < 0.85f || h.visibility().orElse(0f) < 0.85f) return;
 
-        // FORM CHECK: Angle between torso (Hip-Shoulder) and upper arm (Shoulder-Elbow)
         double bodyArmAngle = ExerciseUtils.calculateAngle(h, s, e);
         
-        // Threshold set to 30 degrees as requested
-        if (bodyArmAngle > 30) {
-            // Only suggest correction if at least one rep has been completed
-            if (counts.get(exercise) > 0 && formListener != null) {
+        // Threshold set to 45 degrees for more leniency
+        if (bodyArmAngle > 45) {
+            // ONLY suggest correction if at least one rep has been completed IN THE CURRENT SET
+            if (repCompletedInSet.getOrDefault(exercise, false) && formListener != null) {
                 formListener.onFormFeedback("Bring your arms closer to the body");
             }
             states.put(exercise, State.IDLE);
             return;
         }
 
-        // Additional posture checks to prevent fake reps during other gestures
         float dy = e.y() - s.y();
         boolean isWristAboveShoulder = w.y() < (s.y() - 0.05f);
 
+        // If elbow is up or wrist is above shoulder, reset state.
+        // This is crucial for ignoring gestures.
         if (dy < 0.05f || isWristAboveShoulder) {
             states.put(exercise, State.IDLE);
             return;
@@ -102,11 +127,15 @@ public class RepCounter {
         State state = states.get(exercise);
 
         if (state == State.IDLE || state == State.UP) {
-            if (angle > 165) states.put(exercise, State.DOWN);
+            if (angle > 160) {
+                states.put(exercise, State.DOWN);
+                lastDetectedExercise = exercise; 
+            }
         } else if (state == State.DOWN) {
-            if (angle < 35) {
+            if (angle < 45) { 
                 states.put(exercise, State.UP);
                 incrementCount(exercise);
+                repCompletedInSet.put(exercise, true); 
             }
         }
     }
@@ -118,11 +147,15 @@ public class RepCounter {
         State state = states.get(exercise);
 
         if (state == State.IDLE || state == State.UP) {
-            if (angle < 85) states.put(exercise, State.DOWN);
+            if (angle < 90) { 
+                states.put(exercise, State.DOWN);
+                lastDetectedExercise = exercise;
+            }
         } else if (state == State.DOWN) {
-            if (angle > 170) {
+            if (angle > 160) { 
                 states.put(exercise, State.UP);
                 incrementCount(exercise);
+                repCompletedInSet.put(exercise, true);
             }
         }
     }
@@ -139,6 +172,12 @@ public class RepCounter {
     }
 
     public int getTotalReps() { return totalReps; }
+    
+    public int getLastExerciseCount() {
+        if (lastDetectedExercise.isEmpty()) return 0;
+        return counts.getOrDefault(lastDetectedExercise, 0);
+    }
+    
     public String getLastDetectedExercise() { return lastDetectedExercise; }
     public Map<String, Integer> getCounts() { return new HashMap<>(counts); }
 }
