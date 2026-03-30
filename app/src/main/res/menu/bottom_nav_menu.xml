@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/navigation_workout"
+        android:icon="@android:drawable/ic_media_play"
+        android:title="Workout" />
+    <item
+        android:id="@+id/navigation_progress"
+        android:icon="@android:drawable/ic_menu_sort_by_size"
+        android:title="Progress" />
+    <item
+        android:id="@+id/navigation_streak"
+        android:icon="@android:drawable/btn_star_big_on"
+        android:title="Streak" />
+</menu>
