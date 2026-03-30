@@ -1,20 +1,26 @@
 package com.example.pose;
 
 import java.io.Serializable;
-import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class ExerciseSession implements Serializable {
-    private final Map<String, Integer> exerciseCounts;
+    private final Map<String, Integer> totalExerciseCounts;
+    private final List<WorkoutSet> completedSets;
     private final long durationSeconds;
 
-    public ExerciseSession(Map<String, Integer> exerciseCounts, long durationSeconds) {
-        this.exerciseCounts = exerciseCounts;
+    public ExerciseSession(Map<String, Integer> totalExerciseCounts, List<WorkoutSet> completedSets, long durationSeconds) {
+        this.totalExerciseCounts = totalExerciseCounts;
+        this.completedSets = completedSets;
         this.durationSeconds = durationSeconds;
     }
 
-    public Map<String, Integer> getExerciseCounts() {
-        return exerciseCounts;
+    public Map<String, Integer> getTotalExerciseCounts() {
+        return totalExerciseCounts;
+    }
+
+    public List<WorkoutSet> getCompletedSets() {
+        return completedSets;
     }
 
     public long getDurationSeconds() {
@@ -23,7 +29,7 @@ public class ExerciseSession implements Serializable {
 
     public int getTotalReps() {
         int total = 0;
-        for (int count : exerciseCounts.values()) {
+        for (int count : totalExerciseCounts.values()) {
             total += count;
         }
         return total;

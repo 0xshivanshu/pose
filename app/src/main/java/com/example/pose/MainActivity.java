@@ -105,7 +105,7 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         repCounter = new RepCounter();
         // Voice feedback listener
         repCounter.setRepListener((exercise, count) -> {
-            speak(exercise + " " + count);
+            speak(String.valueOf(count));
         });
 
         // Form feedback listener
@@ -114,6 +114,18 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
             if (currentTime - lastFeedbackTime > FEEDBACK_COOLDOWN_MS) {
                 speak(feedback);
                 lastFeedbackTime = currentTime;
+            }
+        });
+
+        repCounter.setSetListener(new RepCounter.SetListener() {
+            @Override
+            public void onSetStarted(String category) {
+                speak("Started " + category);
+            }
+
+            @Override
+            public void onSetFinished(WorkoutSet set) {
+                speak("Set finished. " + set.getTotalReps() + " reps of " + set.getCategory());
             }
         });
 
@@ -129,7 +141,8 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     }
 
     private void speak(String text) {
-        if (isTtsInitialized && tts != null) {
+        // Prevent speaking if "End Session" gesture is active
+        if (isTtsInitialized && tts != null && handsAboveHeadStartTime == -1) {
             tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null);
         }
     }
@@ -156,16 +169,24 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private void onSessionComplete() {
         if (!isSessionActive) return;
         isSessionActive = false;
+        
+        // Ensure any active set is finished
+        repCounter.finishCurrentSet();
 
         long durationSeconds = (SystemClock.elapsedRealtime() - sessionStartTime) / 1000;
-        Map<String, Integer> counts = repCounter.getCounts();
+        Map<String, Integer> totalCounts = repCounter.getTotalCounts();
+        List<WorkoutSet> completedSets = repCounter.getCompletedSets();
 
         // Stop processing
         if (poseLandmarkerHelper != null) {
             poseLandmarkerHelper.close();
         }
 
-        ExerciseSession session = new ExerciseSession(counts, durationSeconds);
+        ExerciseSession session = new ExerciseSession(totalCounts, completedSets, durationSeconds);
+        
+        // SAVE SESSION PERSISTENTLY
+        WorkoutManager.saveSession(this, session);
+
         Intent intent = new Intent(this, SummaryActivity.class);
         intent.putExtra("EXERCISE_SESSION", session);
         startActivity(intent);
@@ -185,6 +206,7 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                 ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                        .setTargetRotation(viewFinder.getDisplay().getRotation())
                         .build();
 
                 imageAnalysis.setAnalyzer(cameraExecutor, image -> {
@@ -199,10 +221,11 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                     matrix.postRotate(image.getImageInfo().getRotationDegrees());
                     matrix.postScale(-1f, 1f, (float) image.getWidth() / 2f, (float) image.getHeight() / 2f);
 
-                    Bitmap processedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+                    Bitmap processedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, false);
 
                     poseLandmarkerHelper.detectLiveStream(processedBitmap);
                     image.close();
+                    bitmap.recycle(); // Reuse memory
                 });
 
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA;
@@ -229,32 +252,47 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                 List<NormalizedLandmark> landmarks = result.landmarks().get(0);
                 
                 checkHandsAboveHeadGesture(landmarks);
-                checkRestGestures(landmarks);
-
-                repCounter.processLandmarks(landmarks);
                 
-                if (repCounter.isResting()) {
-                    tvExercise.setText("RESTING...");
-                    tvExercise.setTextColor(Color.YELLOW);
-                    tvCount.setText("0"); // Or keep previous, but 0 is clearer for a new start
-                } else {
-                    String exercise = repCounter.getLastDetectedExercise();
-                    tvExercise.setText(exercise.isEmpty() ? "Detecting..." : exercise);
-                    tvExercise.setTextColor(Color.WHITE);
-                    tvCount.setText(String.valueOf(repCounter.getLastExerciseCount()));
+                // Only process exercise detection and rest logic if NOT in the "End Session" motion
+                if (handsAboveHeadStartTime == -1) {
+                    checkRestGestures(landmarks);
+                    repCounter.processLandmarks(landmarks);
+                    
+                    if (repCounter.isResting()) {
+                        tvExercise.setText("FINISHED SET / RESTING");
+                        tvExercise.setTextColor(Color.YELLOW);
+                        tvCount.setText("0"); 
+                    } else {
+                        String category = repCounter.getActiveExerciseCategory();
+                        if (category.isEmpty()) {
+                            tvExercise.setText("Ready to start...");
+                            tvExercise.setTextColor(Color.WHITE);
+                            tvCount.setText("0");
+                        } else {
+                            tvExercise.setText(category);
+                            tvExercise.setTextColor(Color.GREEN);
+                            
+                            if (category.equals(RepCounter.CAT_BICEP_CURL)) {
+                                Map<String, Integer> counts = repCounter.getCurrentSetExerciseCounts();
+                                int left = counts.getOrDefault(RepCounter.BICEP_CURL_LEFT, 0);
+                                int right = counts.getOrDefault(RepCounter.BICEP_CURL_RIGHT, 0);
+                                tvCount.setText("L: " + left + "  R: " + right);
+                            } else {
+                                tvCount.setText(String.valueOf(repCounter.getCurrentSetTotalReps()));
+                            }
+                        }
+                    }
                 }
 
                 // Debug Info: Angles and Y values
                 if (landmarks.size() >= 33) {
-                    // Physical Right arm flare angle (indices 23, 11, 13)
                     double rAngle = ExerciseUtils.calculateAngle(landmarks.get(23), landmarks.get(11), landmarks.get(13));
-                    // Physical Left arm flare angle (indices 24, 12, 14)
                     double lAngle = ExerciseUtils.calculateAngle(landmarks.get(24), landmarks.get(12), landmarks.get(14));
-                    tvDebugAngles.setText(String.format(Locale.US, "Arm-Torso Angles: L:%.1f° R:%.1f°", lAngle, rAngle));
+                    tvDebugAngles.setText(String.format(Locale.US, "Arm-Torso Angles: L:%.1f\u00b0 R:%.1f\u00b0", lAngle, rAngle));
 
                     tvDebugYValues.setText(String.format(Locale.US, "Y Pos: LS:%.2f LW:%.2f | RS:%.2f RW:%.2f", 
-                        landmarks.get(12).y(), landmarks.get(16).y(), // Left side (Physical)
-                        landmarks.get(11).y(), landmarks.get(15).y())); // Right side (Physical)
+                        landmarks.get(12).y(), landmarks.get(16).y(), 
+                        landmarks.get(11).y(), landmarks.get(15).y()));
                 }
             }
         });
@@ -263,9 +301,6 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private void checkRestGestures(List<NormalizedLandmark> landmarks) {
         if (landmarks.size() < 33) return;
 
-        // MP Indices: Mirrored view
-        // Physical Right: Shoulder(11), Elbow(13), Wrist(15), Hip(23)
-        // Physical Left: Shoulder(12), Elbow(14), Wrist(16), Hip(24)
         NormalizedLandmark lShoulder = landmarks.get(11); // Phys R
         NormalizedLandmark rShoulder = landmarks.get(12); // Phys L
         NormalizedLandmark lWrist = landmarks.get(15);
@@ -273,33 +308,26 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         NormalizedLandmark lElbow = landmarks.get(13);
         NormalizedLandmark rElbow = landmarks.get(14);
 
-        // Visibility check
         if (lWrist.visibility().orElse(0f) < 0.5f || rWrist.visibility().orElse(0f) < 0.5f ||
             lShoulder.visibility().orElse(0f) < 0.5f || rShoulder.visibility().orElse(0f) < 0.5f) return;
 
-        // REST GESTURE: Criss-cross across chest
-        // Phys Right hand (MP 15) on Phys Left Shoulder (MP 12)
-        // Phys Left hand (MP 16) on Phys Right Shoulder (MP 11)
         double distRightHandToLeftShoulder = Math.sqrt(Math.pow(lWrist.x() - rShoulder.x(), 2) + Math.pow(lWrist.y() - rShoulder.y(), 2));
         double distLeftHandToRightShoulder = Math.sqrt(Math.pow(rWrist.x() - lShoulder.x(), 2) + Math.pow(rWrist.y() - lShoulder.y(), 2));
 
-        if (distRightHandToLeftShoulder < 0.15f && distLeftHandToRightShoulder < 0.15f && !repCounter.isResting()) {
+        // Finish set / start resting
+        if (distRightHandToLeftShoulder < 0.1f && distLeftHandToRightShoulder < 0.1f && !repCounter.isResting()) {
             repCounter.setResting(true);
-            speak("Resting");
+            // setResting(true) now finishes the set in RepCounter
         } 
         
-        // RESUME: Exactly one hand raised (wrist and elbow above shoulder)
+        // Resume / start new set
         if (repCounter.isResting()) {
-            // Physical Right Side (Mirrored Left indices: 15, 13, 11)
             boolean rRaised = lWrist.y() < lShoulder.y() && lElbow.y() < lShoulder.y();
-            
-            // Physical Left Side (Mirrored Right indices: 16, 14, 12)
             boolean lRaised = rWrist.y() < rShoulder.y() && rElbow.y() < rShoulder.y();
 
-            // XOR: Only one hand raised to resume (avoids conflict with session end gesture)
             if (rRaised ^ lRaised) {
                 repCounter.setResting(false);
-                speak("Resuming");
+                speak("Ready for next set");
             }
         }
     }
@@ -327,6 +355,10 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
             if (handsAboveHeadStartTime == -1) {
                 handsAboveHeadStartTime = SystemClock.elapsedRealtime();
                 gestureFeedbackCard.setVisibility(View.VISIBLE);
+                // Immediately stop any current voice over
+                if (tts != null) {
+                    tts.stop();
+                }
             }
             
             long elapsed = SystemClock.elapsedRealtime() - handsAboveHeadStartTime;

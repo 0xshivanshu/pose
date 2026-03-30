@@ -2,6 +2,7 @@ package com.example.pose;
 
 import android.os.SystemClock;
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -9,22 +10,39 @@ import java.util.Map;
 public class RepCounter {
     private enum State { IDLE, DOWN, UP }
 
-    private final Map<String, Integer> counts = new HashMap<>();
+    private final Map<String, Integer> totalCounts = new HashMap<>();
     private final Map<String, State> states = new HashMap<>();
-    private final Map<String, Boolean> repCompletedInSet = new HashMap<>();
+    private final List<WorkoutSet> completedSets = new ArrayList<>();
+    
+    // Tracks counts for each exercise within the CURRENT set
+    private final Map<String, Integer> currentSetExerciseCounts = new HashMap<>();
+    private final Map<String, Long> lastRepTimes = new HashMap<>();
+    
+    // EMA Smoothing - Increased alpha for better responsiveness
+    private final Map<String, Double> smoothedAngles = new HashMap<>();
+    private static final float SMOOTHING_ALPHA = 0.45f;
+    private static final long MIN_REP_INTERVAL_MS = 800;
+
+    private String activeExerciseCategory = ""; // e.g., "Bicep Curl", "Squat"
+    private int currentSetTotalReps = 0;
     private String lastDetectedExercise = "";
     private int totalReps = 0;
     private boolean isResting = false;
     private long resumeTime = 0;
-    private static final long RESUME_COOLDOWN_MS = 1500; 
+    private static final long RESUME_COOLDOWN_MS = 1000;
+    
+    private long setStartTime = 0;
 
     private RepListener repListener;
     private FormListener formListener;
+    private SetListener setListener;
     
     public static final String BICEP_CURL_LEFT = "Left Bicep Curl";
     public static final String BICEP_CURL_RIGHT = "Right Bicep Curl";
     public static final String SQUAT = "Squat";
-    // public static final String LUNGE = "Lunge";
+    
+    public static final String CAT_BICEP_CURL = "Bicep Curl";
+    public static final String CAT_SQUAT = "Squat";
 
     public interface RepListener {
         void onRepCompleted(String exercise, int count);
@@ -32,6 +50,11 @@ public class RepCounter {
 
     public interface FormListener {
         void onFormFeedback(String feedback);
+    }
+    
+    public interface SetListener {
+        void onSetStarted(String category);
+        void onSetFinished(WorkoutSet set);
     }
 
     public void setRepListener(RepListener listener) {
@@ -42,21 +65,31 @@ public class RepCounter {
         this.formListener = listener;
     }
 
+    public void setSetListener(SetListener listener) {
+        this.setListener = listener;
+    }
+
     public RepCounter() {
-        counts.put(BICEP_CURL_LEFT, 0);
-        counts.put(BICEP_CURL_RIGHT, 0);
-        counts.put(SQUAT, 0);
-        // counts.put(LUNGE, 0);
+        totalCounts.put(BICEP_CURL_LEFT, 0);
+        totalCounts.put(BICEP_CURL_RIGHT, 0);
+        totalCounts.put(SQUAT, 0);
 
         states.put(BICEP_CURL_LEFT, State.IDLE);
         states.put(BICEP_CURL_RIGHT, State.IDLE);
         states.put(SQUAT, State.IDLE);
-        // states.put(LUNGE, State.IDLE);
+        
+        lastRepTimes.put(BICEP_CURL_LEFT, 0L);
+        lastRepTimes.put(BICEP_CURL_RIGHT, 0L);
+        lastRepTimes.put(SQUAT, 0L);
 
-        repCompletedInSet.put(BICEP_CURL_LEFT, false);
-        repCompletedInSet.put(BICEP_CURL_RIGHT, false);
-        repCompletedInSet.put(SQUAT, false);
-        // repCompletedInSet.put(LUNGE, false);
+        resetSetCounts();
+    }
+
+    private void resetSetCounts() {
+        currentSetExerciseCounts.put(BICEP_CURL_LEFT, 0);
+        currentSetExerciseCounts.put(BICEP_CURL_RIGHT, 0);
+        currentSetExerciseCounts.put(SQUAT, 0);
+        currentSetTotalReps = 0;
     }
 
     public boolean isResting() {
@@ -64,25 +97,23 @@ public class RepCounter {
     }
 
     public void setResting(boolean resting) {
+        if (this.isResting == resting) return;
+        
         this.isResting = resting;
         if (resting) {
-            states.put(BICEP_CURL_LEFT, State.IDLE);
-            states.put(BICEP_CURL_RIGHT, State.IDLE);
-            states.put(SQUAT, State.IDLE);
-            // states.put(LUNGE, State.IDLE);
+            finishCurrentSet();
+            resetStates();
         } else {
             resumeTime = SystemClock.elapsedRealtime();
-            lastDetectedExercise = "";
-            repCompletedInSet.put(BICEP_CURL_LEFT, false);
-            repCompletedInSet.put(BICEP_CURL_RIGHT, false);
-            repCompletedInSet.put(SQUAT, false);
-            // repCompletedInSet.put(LUNGE, false);
-            
-            states.put(BICEP_CURL_LEFT, State.IDLE);
-            states.put(BICEP_CURL_RIGHT, State.IDLE);
-            states.put(SQUAT, State.IDLE);
-            // states.put(LUNGE, State.IDLE);
+            resetStates();
         }
+    }
+
+    private void resetStates() {
+        states.put(BICEP_CURL_LEFT, State.IDLE);
+        states.put(BICEP_CURL_RIGHT, State.IDLE);
+        states.put(SQUAT, State.IDLE);
+        lastDetectedExercise = "";
     }
 
     public void processLandmarks(List<NormalizedLandmark> landmarks) {
@@ -92,43 +123,92 @@ public class RepCounter {
             return;
         }
 
-        processBicepCurl(landmarks.get(11), landmarks.get(13), landmarks.get(15), landmarks.get(23), BICEP_CURL_RIGHT);
-        processBicepCurl(landmarks.get(12), landmarks.get(14), landmarks.get(16), landmarks.get(24), BICEP_CURL_LEFT);
-        processSquat(landmarks, SQUAT);
-        // processLunge(landmarks, LUNGE);
+        // SWAPPED L/R logic for mirrored camera view
+        // Landmark 11 is Left in MediaPipe, but in mirrored front cam it's Physical Right.
+        if (activeExerciseCategory.isEmpty() || activeExerciseCategory.equals(CAT_BICEP_CURL)) {
+            processBicepCurl(landmarks.get(11), landmarks.get(13), landmarks.get(15), landmarks.get(23), BICEP_CURL_LEFT);
+            processBicepCurl(landmarks.get(12), landmarks.get(14), landmarks.get(16), landmarks.get(24), BICEP_CURL_RIGHT);
+        }
+        
+        if (activeExerciseCategory.isEmpty() || activeExerciseCategory.equals(CAT_SQUAT)) {
+            processSquat(landmarks, SQUAT);
+        }
+    }
+
+    private String getCategory(String exercise) {
+        if (exercise.contains("Bicep Curl")) return CAT_BICEP_CURL;
+        if (exercise.equals(SQUAT)) return CAT_SQUAT;
+        return "";
+    }
+
+    private void startSet(String exercise) {
+        activeExerciseCategory = getCategory(exercise);
+        resetSetCounts();
+        setStartTime = SystemClock.elapsedRealtime();
+        if (setListener != null) {
+            setListener.onSetStarted(activeExerciseCategory);
+        }
+    }
+
+    public void finishCurrentSet() {
+        if (!activeExerciseCategory.isEmpty() && currentSetTotalReps > 0) {
+            long duration = SystemClock.elapsedRealtime() - setStartTime;
+            Map<String, Integer> setCounts = new HashMap<>();
+            if (activeExerciseCategory.equals(CAT_BICEP_CURL)) {
+                setCounts.put(BICEP_CURL_LEFT, currentSetExerciseCounts.get(BICEP_CURL_LEFT));
+                setCounts.put(BICEP_CURL_RIGHT, currentSetExerciseCounts.get(BICEP_CURL_RIGHT));
+            } else {
+                setCounts.put(activeExerciseCategory, currentSetTotalReps);
+            }
+            
+            WorkoutSet set = new WorkoutSet(activeExerciseCategory, setCounts, duration);
+            completedSets.add(set);
+            if (setListener != null) {
+                setListener.onSetFinished(set);
+            }
+        }
+        activeExerciseCategory = "";
+        resetSetCounts();
+        setStartTime = 0;
     }
 
     private void processBicepCurl(NormalizedLandmark s, NormalizedLandmark e, NormalizedLandmark w, NormalizedLandmark h, String exercise) {
-        if (s.visibility().orElse(0f) < 0.85f || e.visibility().orElse(0f) < 0.85f || w.visibility().orElse(0f) < 0.85f || h.visibility().orElse(0f) < 0.85f) return;
+        // Lowered visibility threshold for better responsiveness
+        float visThreshold = 0.5f;
+        if (s.visibility().orElse(0f) < visThreshold || e.visibility().orElse(0f) < visThreshold || 
+            w.visibility().orElse(0f) < visThreshold || h.visibility().orElse(0f) < visThreshold) return;
 
         double bodyArmAngle = ExerciseUtils.calculateAngle(h, s, e);
         
-        if (bodyArmAngle > 45) {
-            if (repCompletedInSet.getOrDefault(exercise, false) && formListener != null) {
-                formListener.onFormFeedback("Bring your arms closer to the body");
+        // Increased tolerance for elbow flare (45 -> 60)
+        if (bodyArmAngle > 60) {
+            if (!activeExerciseCategory.isEmpty() && formListener != null) {
+                formListener.onFormFeedback("Keep elbow in");
             }
             states.put(exercise, State.IDLE);
             return;
         }
 
-        if (w.y() < s.y()) {
-            states.put(exercise, State.IDLE);
-            return;
-        }
+        double rawAngle = ExerciseUtils.calculateAngle(s, e, w);
+        double angle = smoothedAngles.getOrDefault(exercise, rawAngle);
+        angle = angle + SMOOTHING_ALPHA * (rawAngle - angle);
+        smoothedAngles.put(exercise, angle);
 
-        double angle = ExerciseUtils.calculateAngle(s, e, w);
         State state = states.get(exercise);
+        long currentTime = SystemClock.elapsedRealtime();
 
+        // Optimized rep trigger angles
         if (state == State.IDLE || state == State.UP) {
             if (angle > 160) { 
                 states.put(exercise, State.DOWN);
-                lastDetectedExercise = exercise; 
             }
         } else if (state == State.DOWN) {
             if (angle < 45) { 
-                states.put(exercise, State.UP);
-                incrementCount(exercise);
-                repCompletedInSet.put(exercise, true); 
+                if (currentTime - lastRepTimes.get(exercise) > MIN_REP_INTERVAL_MS) {
+                    states.put(exercise, State.UP);
+                    lastRepTimes.put(exercise, currentTime);
+                    incrementCount(exercise);
+                }
             }
         }
     }
@@ -144,69 +224,56 @@ public class RepCounter {
         float rVis = (rHip.visibility().orElse(0f) + rKnee.visibility().orElse(0f) + rAnkle.visibility().orElse(0f)) / 3f;
         float lVis = (lHip.visibility().orElse(0f) + lKnee.visibility().orElse(0f) + lAnkle.visibility().orElse(0f)) / 3f;
 
-        if (rVis < 0.7f && lVis < 0.7f) return;
+        if (rVis < 0.5f && lVis < 0.5f) return;
 
-        double angle = (rVis > lVis) ? ExerciseUtils.calculateAngle(rHip, rKnee, rAnkle) : ExerciseUtils.calculateAngle(lHip, lKnee, lAnkle);
+        double rawAngle = (rVis > lVis) ? ExerciseUtils.calculateAngle(rHip, rKnee, rAnkle) : ExerciseUtils.calculateAngle(lHip, lKnee, lAnkle);
+        double angle = smoothedAngles.getOrDefault(exercise, rawAngle);
+        angle = angle + SMOOTHING_ALPHA * (rawAngle - angle);
+        smoothedAngles.put(exercise, angle);
+
         State state = states.get(exercise);
+        long currentTime = SystemClock.elapsedRealtime();
 
         if (state == State.IDLE || state == State.UP) {
-            if (angle < 90) { 
+            if (angle < 95) { 
                 states.put(exercise, State.DOWN);
-                lastDetectedExercise = exercise;
             }
         } else if (state == State.DOWN) {
             if (angle > 160) { 
-                states.put(exercise, State.UP);
-                incrementCount(exercise);
-                repCompletedInSet.put(exercise, true);
+                if (currentTime - lastRepTimes.get(exercise) > MIN_REP_INTERVAL_MS) {
+                    states.put(exercise, State.UP);
+                    lastRepTimes.put(exercise, currentTime);
+                    incrementCount(exercise);
+                }
             }
         }
     }
-
-    /*
-    private void processLunge(List<NormalizedLandmark> landmarks, String exercise) {
-        NormalizedLandmark rHip = landmarks.get(23);
-        NormalizedLandmark rKnee = landmarks.get(25);
-        NormalizedLandmark rAnkle = landmarks.get(27);
-        NormalizedLandmark lHip = landmarks.get(24);
-        NormalizedLandmark lKnee = landmarks.get(26);
-        NormalizedLandmark lAnkle = landmarks.get(28);
-
-        double rAngle = ExerciseUtils.calculateAngle(rHip, rKnee, rAnkle);
-        double lAngle = ExerciseUtils.calculateAngle(lHip, lKnee, lAnkle);
-
-        State state = states.get(exercise);
-
-        if (state == State.IDLE || state == State.UP) {
-            if (rAngle < 100 || lAngle < 100) {
-                states.put(exercise, State.DOWN);
-                lastDetectedExercise = exercise;
-            }
-        } else if (state == State.DOWN) {
-            if (rAngle > 150 && lAngle > 150) {
-                states.put(exercise, State.UP);
-                incrementCount(exercise);
-                repCompletedInSet.put(exercise, true);
-            }
-        }
-    }
-    */
 
     private void incrementCount(String exercise) {
-        int newCount = counts.get(exercise) + 1;
-        counts.put(exercise, newCount);
+        if (activeExerciseCategory.isEmpty()) {
+            startSet(exercise);
+        }
+        
+        int newTotal = totalCounts.get(exercise) + 1;
+        totalCounts.put(exercise, newTotal);
+        
+        int newSetCount = currentSetExerciseCounts.get(exercise) + 1;
+        currentSetExerciseCounts.put(exercise, newSetCount);
+        
+        currentSetTotalReps++;
         totalReps++;
         lastDetectedExercise = exercise;
+        
         if (repListener != null) {
-            repListener.onRepCompleted(exercise, newCount);
+            repListener.onRepCompleted(exercise, newSetCount);
         }
     }
 
     public int getTotalReps() { return totalReps; }
-    public int getLastExerciseCount() {
-        if (lastDetectedExercise.isEmpty()) return 0;
-        return counts.getOrDefault(lastDetectedExercise, 0);
-    }
+    public int getCurrentSetTotalReps() { return currentSetTotalReps; }
+    public Map<String, Integer> getCurrentSetExerciseCounts() { return new HashMap<>(currentSetExerciseCounts); }
+    public String getActiveExerciseCategory() { return activeExerciseCategory; }
     public String getLastDetectedExercise() { return lastDetectedExercise; }
-    public Map<String, Integer> getCounts() { return new HashMap<>(counts); }
+    public Map<String, Integer> getTotalCounts() { return new HashMap<>(totalCounts); }
+    public List<WorkoutSet> getCompletedSets() { return new ArrayList<>(completedSets); }
 }
