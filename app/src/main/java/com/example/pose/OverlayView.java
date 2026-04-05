@@ -12,23 +12,27 @@ import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker;
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult;
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
 import com.google.mediapipe.tasks.components.containers.Connection;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * Custom view for rendering Pose Landmarker results with enhanced smoothing.
+ * High-performance OverlayView for rendering Pose Landmarker results.
+ * Optimized for zero-allocation in the draw loop and responsive smoothing.
  */
 public class OverlayView extends View {
-    private List<List<NormalizedLandmark>> smoothedLandmarks = null;
-    // Lower value = more smoothing (more reliance on previous frame). 
-    // Increased smoothing from 0.4 to 0.15 for maximum stability.
-    private static final float SMOOTHING_FACTOR = 0.15f; 
+    // Responsive smoothing: 0.85 ensures minimal lag while still filtering micro-jitter.
+    private static final float SMOOTHING_FACTOR = 0.85f; 
+    
+    // Landmark storage using simple arrays to avoid object allocation (ArrayList) per frame.
+    private float[][] smoothedX;
+    private float[][] smoothedY;
+    private float[][] smoothedV;
     
     private Paint linePaint;
     private Paint pointPaint;
     private int imageWidth = 1;
     private int imageHeight = 1;
+    private boolean hasResults = false;
 
     public OverlayView(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
@@ -37,15 +41,15 @@ public class OverlayView extends View {
 
     private void initPaints() {
         linePaint = new Paint();
-        linePaint.setColor(Color.CYAN);
-        linePaint.setStrokeWidth(12F); // Slightly thicker lines for better visibility
+        linePaint.setColor(Color.WHITE);
+        linePaint.setStrokeWidth(10F); 
         linePaint.setStyle(Paint.Style.STROKE);
         linePaint.setStrokeCap(Paint.Cap.ROUND);
         linePaint.setAntiAlias(true);
 
         pointPaint = new Paint();
         pointPaint.setColor(Color.YELLOW);
-        pointPaint.setStrokeWidth(14F);
+        pointPaint.setStrokeWidth(12F);
         pointPaint.setStyle(Paint.Style.FILL);
         pointPaint.setAntiAlias(true);
     }
@@ -54,49 +58,52 @@ public class OverlayView extends View {
         this.imageWidth = imageWidth;
         this.imageHeight = imageHeight;
         
-        if (results == null || results.landmarks().isEmpty()) {
-            smoothedLandmarks = null;
+        if (results == null || results.landmarks() == null || results.landmarks().isEmpty()) {
+            hasResults = false;
         } else {
-            smoothLandmarks(results.landmarks());
+            hasResults = true;
+            updateSmoothedLandmarks(results.landmarks());
         }
-        invalidate();
+        postInvalidate();
     }
 
-    private void smoothLandmarks(List<List<NormalizedLandmark>> newResults) {
-        if (smoothedLandmarks == null || smoothedLandmarks.size() != newResults.size()) {
-            smoothedLandmarks = new ArrayList<>();
-            for (List<NormalizedLandmark> list : newResults) {
-                smoothedLandmarks.add(new ArrayList<>(list));
+    private void updateSmoothedLandmarks(List<List<NormalizedLandmark>> newResults) {
+        int numPersons = newResults.size();
+        
+        // Initialize or resize arrays if needed
+        if (smoothedX == null || smoothedX.length != numPersons) {
+            smoothedX = new float[numPersons][33];
+            smoothedY = new float[numPersons][33];
+            smoothedV = new float[numPersons][33];
+            
+            for (int i = 0; i < numPersons; i++) {
+                List<NormalizedLandmark> person = newResults.get(i);
+                for (int j = 0; j < 33; j++) {
+                    NormalizedLandmark lm = person.get(j);
+                    smoothedX[i][j] = lm.x();
+                    smoothedY[i][j] = lm.y();
+                    smoothedV[i][j] = lm.visibility().orElse(0f);
+                }
             }
             return;
         }
 
-        for (int i = 0; i < newResults.size(); i++) {
-            List<NormalizedLandmark> currentList = newResults.get(i);
-            List<NormalizedLandmark> prevList = smoothedLandmarks.get(i);
-            List<NormalizedLandmark> smoothedList = new ArrayList<>();
-
-            for (int j = 0; j < currentList.size(); j++) {
-                NormalizedLandmark c = currentList.get(j);
-                NormalizedLandmark p = prevList.get(j);
-
-                // EMA: Smoothed = (Alpha * Current) + ((1 - Alpha) * Previous)
-                float sx = (SMOOTHING_FACTOR * c.x()) + ((1 - SMOOTHING_FACTOR) * p.x());
-                float sy = (SMOOTHING_FACTOR * c.y()) + ((1 - SMOOTHING_FACTOR) * p.y());
-                float sz = (SMOOTHING_FACTOR * c.z()) + ((1 - SMOOTHING_FACTOR) * p.z());
-                float sv = (SMOOTHING_FACTOR * c.visibility().orElse(0f)) + ((1 - SMOOTHING_FACTOR) * p.visibility().orElse(0f));
-                float sp = (SMOOTHING_FACTOR * c.presence().orElse(0f)) + ((1 - SMOOTHING_FACTOR) * p.presence().orElse(0f));
-
-                smoothedList.add(NormalizedLandmark.create(sx, sy, sz, Optional.of(sv), Optional.of(sp)));
+        for (int i = 0; i < numPersons; i++) {
+            List<NormalizedLandmark> person = newResults.get(i);
+            for (int j = 0; j < 33; j++) {
+                NormalizedLandmark lm = person.get(j);
+                // EMA filter: more weight (0.85) on current frame for zero lag
+                smoothedX[i][j] = (SMOOTHING_FACTOR * lm.x()) + ((1 - SMOOTHING_FACTOR) * smoothedX[i][j]);
+                smoothedY[i][j] = (SMOOTHING_FACTOR * lm.y()) + ((1 - SMOOTHING_FACTOR) * smoothedY[i][j]);
+                smoothedV[i][j] = (SMOOTHING_FACTOR * lm.visibility().orElse(0f)) + ((1 - SMOOTHING_FACTOR) * smoothedV[i][j]);
             }
-            smoothedLandmarks.set(i, smoothedList);
         }
     }
 
     @Override
     protected void onDraw(@NonNull Canvas canvas) {
         super.onDraw(canvas);
-        if (smoothedLandmarks == null) return;
+        if (!hasResults || smoothedX == null) return;
 
         float scaleX = (float) getWidth() / imageWidth;
         float scaleY = (float) getHeight() / imageHeight;
@@ -107,37 +114,33 @@ public class OverlayView extends View {
 
         float minVisibility = 0.5f;
 
-        for (List<NormalizedLandmark> landmarks : smoothedLandmarks) {
-            // 1. Draw Skeleton Connections
+        for (int p = 0; p < smoothedX.length; p++) {
+            // 1. Draw Connections
             for (Connection connection : PoseLandmarker.POSE_LANDMARKS) {
-                // Filter out face connections (landmarks 0-10)
-                if (connection.start() <= 10 || connection.end() <= 10) continue;
+                int startIdx = connection.start();
+                int endIdx = connection.end();
+                
+                // Skip face landmarks for cleaner UI and faster render
+                if (startIdx <= 10 || endIdx <= 10) continue;
 
-                NormalizedLandmark start = landmarks.get(connection.start());
-                NormalizedLandmark end = landmarks.get(connection.end());
-
-                if (start.visibility().orElse(0f) > minVisibility && end.visibility().orElse(0f) > minVisibility) {
+                if (smoothedV[p][startIdx] > minVisibility && smoothedV[p][endIdx] > minVisibility) {
                     canvas.drawLine(
-                            start.x() * imageWidth * scale + offsetX,
-                            start.y() * imageHeight * scale + offsetY,
-                            end.x() * imageWidth * scale + offsetX,
-                            end.y() * imageHeight * scale + offsetY,
+                            smoothedX[p][startIdx] * imageWidth * scale + offsetX,
+                            smoothedY[p][startIdx] * imageHeight * scale + offsetY,
+                            smoothedX[p][endIdx] * imageWidth * scale + offsetX,
+                            smoothedY[p][endIdx] * imageHeight * scale + offsetY,
                             linePaint
                     );
                 }
             }
 
-            // 2. Draw Joint Points
-            for (int i = 0; i < landmarks.size(); i++) {
-                // Filter out face points (0-10)
-                if (i <= 10) continue;
-
-                NormalizedLandmark landmark = landmarks.get(i);
-                if (landmark.visibility().orElse(0f) > minVisibility) {
+            // 2. Draw Joint Circles
+            for (int i = 11; i < 33; i++) {
+                if (smoothedV[p][i] > minVisibility) {
                     canvas.drawCircle(
-                            landmark.x() * imageWidth * scale + offsetX,
-                            landmark.y() * imageHeight * scale + offsetY,
-                            8f, // Slightly larger joints
+                            smoothedX[p][i] * imageWidth * scale + offsetX,
+                            smoothedY[p][i] * imageHeight * scale + offsetY,
+                            8f,
                             pointPaint
                     );
                 }

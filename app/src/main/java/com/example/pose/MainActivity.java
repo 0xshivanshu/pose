@@ -53,7 +53,6 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private TextView tvExercise;
     private TextView tvDebugAngles;
     private TextView tvDebugYValues;
-    private Button btnEndSession;
     private View gestureFeedbackCard;
     private ProgressBar gestureProgressBar;
     
@@ -93,7 +92,7 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         tvExercise = findViewById(R.id.tvExercise);
         tvDebugAngles = findViewById(R.id.tvDebugAngles);
         tvDebugYValues = findViewById(R.id.tvDebugYValues);
-        btnEndSession = findViewById(R.id.btnEndSession);
+        Button btnEndSession = findViewById(R.id.btnEndSession);
         gestureFeedbackCard = findViewById(R.id.gestureFeedbackCard);
         gestureProgressBar = findViewById(R.id.gestureProgressBar);
 
@@ -102,7 +101,7 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         // Initialize TextToSpeech
         tts = new TextToSpeech(this, this);
 
-        repCounter = new RepCounter();
+        repCounter = new RepCounter(this);
         // Voice feedback listener
         repCounter.setRepListener((exercise, count) -> {
             speak(String.valueOf(count));
@@ -240,6 +239,13 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     }
 
     @Override
+    public void onError(String error) {
+        runOnUiThread(() -> {
+            Toast.makeText(this, error, Toast.LENGTH_SHORT).show();
+        });
+    }
+
+    @Override
     public void onResults(PoseLandmarkerResult result, MPImage image) {
         if (!isSessionActive) return;
 
@@ -288,7 +294,7 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                 if (landmarks.size() >= 33) {
                     double rAngle = ExerciseUtils.calculateAngle(landmarks.get(23), landmarks.get(11), landmarks.get(13));
                     double lAngle = ExerciseUtils.calculateAngle(landmarks.get(24), landmarks.get(12), landmarks.get(14));
-                    tvDebugAngles.setText(String.format(Locale.US, "Arm-Torso Angles: L:%.1f\u00b0 R:%.1f\u00b0", lAngle, rAngle));
+                    tvDebugAngles.setText(String.format(Locale.US, "Arm-Torso Angles: L:%.1f° R:%.1f°", lAngle, rAngle));
 
                     tvDebugYValues.setText(String.format(Locale.US, "Y Pos: LS:%.2f LW:%.2f | RS:%.2f RW:%.2f", 
                         landmarks.get(12).y(), landmarks.get(16).y(), 
@@ -311,76 +317,58 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         if (lWrist.visibility().orElse(0f) < 0.5f || rWrist.visibility().orElse(0f) < 0.5f ||
             lShoulder.visibility().orElse(0f) < 0.5f || rShoulder.visibility().orElse(0f) < 0.5f) return;
 
-        double distRightHandToLeftShoulder = Math.sqrt(Math.pow(lWrist.x() - rShoulder.x(), 2) + Math.pow(lWrist.y() - rShoulder.y(), 2));
+        // Strict Rest Gesture: Opposite hands to opposite shoulders
         double distLeftHandToRightShoulder = Math.sqrt(Math.pow(rWrist.x() - lShoulder.x(), 2) + Math.pow(rWrist.y() - lShoulder.y(), 2));
+        double distRightHandToLeftShoulder = Math.sqrt(Math.pow(lWrist.x() - rShoulder.x(), 2) + Math.pow(lWrist.y() - rShoulder.y(), 2));
+
+        // Height check: wrists should be near shoulder level (y-coordinate)
+        boolean atShoulderLevel = Math.abs(rWrist.y() - lShoulder.y()) < 0.12f && Math.abs(lWrist.y() - rShoulder.y()) < 0.12f;
 
         // Finish set / start resting
-        if (distRightHandToLeftShoulder < 0.1f && distLeftHandToRightShoulder < 0.1f && !repCounter.isResting()) {
+        if (distLeftHandToRightShoulder < 0.12f && distRightHandToLeftShoulder < 0.12f && atShoulderLevel && !repCounter.isResting()) {
             repCounter.setResting(true);
-            // setResting(true) now finishes the set in RepCounter
         } 
         
-        // Resume / start new set
+        // Resume / start new set (raised hand logic)
         if (repCounter.isResting()) {
             boolean rRaised = lWrist.y() < lShoulder.y() && lElbow.y() < lShoulder.y();
             boolean lRaised = rWrist.y() < rShoulder.y() && rElbow.y() < rShoulder.y();
 
             if (rRaised ^ lRaised) {
                 repCounter.setResting(false);
-                speak("Ready for next set");
             }
         }
     }
 
     private void checkHandsAboveHeadGesture(List<NormalizedLandmark> landmarks) {
-        if (landmarks.size() < 20) {
-            resetGestureFeedback();
-            return;
-        }
+        if (landmarks.size() < 33) return;
 
-        NormalizedLandmark leftWrist = landmarks.get(15);
-        NormalizedLandmark rightWrist = landmarks.get(16);
-        NormalizedLandmark leftShoulder = landmarks.get(11);
-        NormalizedLandmark rightShoulder = landmarks.get(12);
+        NormalizedLandmark lWrist = landmarks.get(15);
+        NormalizedLandmark rWrist = landmarks.get(16);
+        NormalizedLandmark lShoulder = landmarks.get(11);
+        NormalizedLandmark rShoulder = landmarks.get(12);
 
-        if (leftWrist.visibility().orElse(0f) < 0.5f || rightWrist.visibility().orElse(0f) < 0.5f) {
-            resetGestureFeedback();
-            return;
-        }
+        // Check if both wrists are significantly above the shoulders
+        boolean handsAboveHead = lWrist.y() < (lShoulder.y() - 0.2f) && rWrist.y() < (rShoulder.y() - 0.2f);
 
-        boolean handsUp = leftWrist.y() < (leftShoulder.y() - 0.1f) && 
-                         rightWrist.y() < (rightShoulder.y() - 0.1f);
-
-        if (handsUp) {
+        if (handsAboveHead) {
             if (handsAboveHeadStartTime == -1) {
                 handsAboveHeadStartTime = SystemClock.elapsedRealtime();
                 gestureFeedbackCard.setVisibility(View.VISIBLE);
-                // Immediately stop any current voice over
-                if (tts != null) {
-                    tts.stop();
-                }
             }
-            
-            long elapsed = SystemClock.elapsedRealtime() - handsAboveHeadStartTime;
-            gestureProgressBar.setProgress((int) elapsed);
 
-            if (elapsed > GESTURE_HOLD_MS) {
+            long elapsedTime = SystemClock.elapsedRealtime() - handsAboveHeadStartTime;
+            int progress = (int) ((elapsedTime * 100) / GESTURE_HOLD_MS);
+            gestureProgressBar.setProgress(Math.min(progress, 100));
+
+            if (elapsedTime >= GESTURE_HOLD_MS) {
                 onSessionComplete();
             }
         } else {
-            resetGestureFeedback();
+            handsAboveHeadStartTime = -1;
+            gestureFeedbackCard.setVisibility(View.GONE);
+            gestureProgressBar.setProgress(0);
         }
-    }
-
-    private void resetGestureFeedback() {
-        handsAboveHeadStartTime = -1;
-        gestureFeedbackCard.setVisibility(View.GONE);
-        gestureProgressBar.setProgress(0);
-    }
-
-    @Override
-    public void onError(String error) {
-        runOnUiThread(() -> Toast.makeText(this, error, Toast.LENGTH_SHORT).show());
     }
 
     private boolean allPermissionsGranted() {
@@ -409,14 +397,12 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        isSessionActive = false;
+        if (cameraExecutor != null) {
+            cameraExecutor.shutdown();
+        }
         if (tts != null) {
             tts.stop();
             tts.shutdown();
-        }
-        cameraExecutor.shutdown();
-        if (poseLandmarkerHelper != null) {
-            poseLandmarkerHelper.close();
         }
     }
 }

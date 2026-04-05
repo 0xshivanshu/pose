@@ -1,0 +1,26 @@
+[
+  {
+    "id": "bicep_curl",
+    "name": "Bicep Curl",
+    "isBilateral": true,
+    "sideInversion": true,
+    "checkpoints": [
+      { "type": "greater_than", "threshold": 160, "joints": [11, 13, 15] },
+      { "type": "less_than", "threshold": 45, "joints": [11, 13, 15] }
+    ],
+    "constraints": [
+      { "type": "greater_than", "threshold": 40, "joints": [23, 11, 13], "feedback": "Keep elbow in" }
+    ]
+  },
+  {
+    "id": "squat",
+    "name": "Squat",
+    "isBilateral": false,
+    "sideInversion": false,
+    "checkpoints": [
+      { "type": "less_than", "threshold": 95, "joints": [24, 26, 28] },
+      { "type": "greater_than", "threshold": 160, "joints": [24, 26, 28] }
+    ],
+    "constraints": []
+  }
+]
