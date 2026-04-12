@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.os.Bundle;
@@ -68,8 +69,11 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private long handsAboveHeadStartTime = -1;
     private static final long GESTURE_HOLD_MS = 3000;
 
-    // Bitmap reuse to reduce latency
+    // Latency optimization: Shared resources
     private Bitmap sharedBitmap = null;
+    private Bitmap processedBitmap = null;
+    private Canvas processedCanvas = null;
+    private Matrix drawMatrix = new Matrix();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -197,17 +201,27 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                         return;
                     }
 
+                    // Strict latency optimization: Avoid all allocations in the loop
                     if (sharedBitmap == null || sharedBitmap.getWidth() != image.getWidth() || sharedBitmap.getHeight() != image.getHeight()) {
                         sharedBitmap = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
+                        
+                        int rotation = image.getImageInfo().getRotationDegrees();
+                        int targetW = (rotation % 180 == 0) ? image.getWidth() : image.getHeight();
+                        int targetH = (rotation % 180 == 0) ? image.getHeight() : image.getWidth();
+                        
+                        processedBitmap = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888);
+                        processedCanvas = new Canvas(processedBitmap);
+                        
+                        drawMatrix.reset();
+                        drawMatrix.postRotate(rotation);
+                        
+                        float centerX = targetW / 2f;
+                        float centerY = targetH / 2f;
+                        drawMatrix.postScale(-1f, 1f, centerX, centerY);
                     }
                     
                     sharedBitmap.copyPixelsFromBuffer(image.getPlanes()[0].getBuffer());
-
-                    Matrix matrix = new Matrix();
-                    matrix.postRotate(image.getImageInfo().getRotationDegrees());
-                    matrix.postScale(-1f, 1f, (float) image.getWidth() / 2f, (float) image.getHeight() / 2f);
-
-                    Bitmap processedBitmap = Bitmap.createBitmap(sharedBitmap, 0, 0, sharedBitmap.getWidth(), sharedBitmap.getHeight(), matrix, false);
+                    processedCanvas.drawBitmap(sharedBitmap, drawMatrix, null);
 
                     poseLandmarkerHelper.detectLiveStream(processedBitmap);
                     image.close();
@@ -240,7 +254,6 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                 if (handsAboveHeadStartTime == -1) {
                     checkRestGestures(landmarks);
                     repCounter.processLandmarks(landmarks);
-                    
                     updateUI();
                 }
             }
@@ -308,22 +321,34 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     }
 
     private void checkRestGestures(List<NormalizedLandmark> landmarks) {
-        NormalizedLandmark lShoulder = landmarks.get(11);
-        NormalizedLandmark rShoulder = landmarks.get(12);
+        NormalizedLandmark lShoulder = landmarks.get(11); // Physical Left
+        NormalizedLandmark rShoulder = landmarks.get(12); // Physical Right
         NormalizedLandmark lWrist = landmarks.get(15);
         NormalizedLandmark rWrist = landmarks.get(16);
 
         float visThreshold = 0.5f;
         if (lWrist.visibility().orElse(0f) > visThreshold && rWrist.visibility().orElse(0f) > visThreshold) {
-            boolean crossing = rWrist.x() < lWrist.x();
-            boolean isNearShoulders = lWrist.y() < lShoulder.y() + 0.1f && rWrist.y() < rShoulder.y() + 0.1f;
             
-            if (crossing && isNearShoulders) {
+            // MIRRORED VIEW LOGIC:
+            // Landmark 16 (Physical Right) has smaller X than Landmark 15 (Physical Left) normally.
+            // When crossed, Landmark 16.x > Landmark 15.x.
+            boolean crossing = rWrist.x() > lWrist.x();
+            
+            // Touching opposite shoulders while crossed:
+            // Physical Left Wrist (15) near Physical Right Shoulder (12)
+            // Physical Right Wrist (16) near Physical Left Shoulder (11)
+            double distLtoR = Math.sqrt(Math.pow(lWrist.x() - rShoulder.x(), 2) + Math.pow(lWrist.y() - rShoulder.y(), 2));
+            double distRtoL = Math.sqrt(Math.pow(rWrist.x() - lShoulder.x(), 2) + Math.pow(rWrist.y() - lShoulder.y(), 2));
+            
+            boolean touchingShoulders = distLtoR < 0.15 && distRtoL < 0.15;
+            
+            if (crossing && touchingShoulders) {
                 if (!repCounter.isResting()) {
                     repCounter.setResting(true);
                     speak("Set complete. Resting.");
                 }
-            } else if (!crossing && !isNearShoulders) {
+            } else if (lWrist.y() < lShoulder.y() - 0.05 || rWrist.y() < rShoulder.y() - 0.05) {
+                // Resume when at least one hand is raised above shoulder level
                 if (repCounter.isResting()) {
                     repCounter.setResting(false);
                     speak("Resuming workout.");

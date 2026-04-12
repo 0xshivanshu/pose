@@ -88,6 +88,11 @@ public class HomeActivity extends AppCompatActivity {
                 startActivity(new Intent(HomeActivity.this, LoginActivity.class));
                 finish();
                 return true;
+            } else if (itemId == R.id.navigation_progress) {
+                Intent intent = new Intent(HomeActivity.this, DailyReportActivity.class);
+                intent.putExtra("selected_date", fullDateFormat.format(new Date()));
+                startActivity(intent);
+                return true;
             }
             return true;
         });
