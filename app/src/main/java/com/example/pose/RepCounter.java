@@ -14,16 +14,14 @@ public class RepCounter {
     private final Map<String, State> states = new HashMap<>();
     private final List<WorkoutSet> completedSets = new ArrayList<>();
     
-    // Tracks counts for each exercise within the CURRENT set
     private final Map<String, Integer> currentSetExerciseCounts = new HashMap<>();
     private final Map<String, Long> lastRepTimes = new HashMap<>();
     
-    // EMA Smoothing - Increased alpha for better responsiveness
     private final Map<String, Double> smoothedAngles = new HashMap<>();
     private static final float SMOOTHING_ALPHA = 0.45f;
     private static final long MIN_REP_INTERVAL_MS = 800;
 
-    private String activeExerciseCategory = ""; // e.g., "Bicep Curl", "Squat"
+    private String activeExerciseCategory = ""; 
     private int currentSetTotalReps = 0;
     private String lastDetectedExercise = "";
     private int totalReps = 0;
@@ -123,11 +121,12 @@ public class RepCounter {
             return;
         }
 
-        // SWAPPED L/R logic for mirrored camera view
-        // Landmark 11 is Left in MediaPipe, but in mirrored front cam it's Physical Right.
+        // SWAPPED L/R for Mirrored Front Camera
+        // MediaPipe 12 (Right side of image) -> Physical Left
+        // MediaPipe 11 (Left side of image) -> Physical Right
         if (activeExerciseCategory.isEmpty() || activeExerciseCategory.equals(CAT_BICEP_CURL)) {
-            processBicepCurl(landmarks.get(11), landmarks.get(13), landmarks.get(15), landmarks.get(23), BICEP_CURL_LEFT);
-            processBicepCurl(landmarks.get(12), landmarks.get(14), landmarks.get(16), landmarks.get(24), BICEP_CURL_RIGHT);
+            processBicepCurl(landmarks.get(12), landmarks.get(14), landmarks.get(16), landmarks.get(24), BICEP_CURL_LEFT);
+            processBicepCurl(landmarks.get(11), landmarks.get(13), landmarks.get(15), landmarks.get(23), BICEP_CURL_RIGHT);
         }
         
         if (activeExerciseCategory.isEmpty() || activeExerciseCategory.equals(CAT_SQUAT)) {
@@ -173,20 +172,17 @@ public class RepCounter {
     }
 
     private void processBicepCurl(NormalizedLandmark s, NormalizedLandmark e, NormalizedLandmark w, NormalizedLandmark h, String exercise) {
-        // Lowered visibility threshold for better responsiveness
         float visThreshold = 0.5f;
         if (s.visibility().orElse(0f) < visThreshold || e.visibility().orElse(0f) < visThreshold || 
             w.visibility().orElse(0f) < visThreshold || h.visibility().orElse(0f) < visThreshold) return;
 
         double bodyArmAngle = ExerciseUtils.calculateAngle(h, s, e);
         
-        // Increased tolerance for elbow flare (45 -> 60)
+        // Form Check: Elbow Flaring
         if (bodyArmAngle > 60) {
             if (!activeExerciseCategory.isEmpty() && formListener != null) {
-                formListener.onFormFeedback("Keep elbow in");
+                formListener.onFormFeedback("Keep elbow closer to body");
             }
-            states.put(exercise, State.IDLE);
-            return;
         }
 
         double rawAngle = ExerciseUtils.calculateAngle(s, e, w);
@@ -197,7 +193,6 @@ public class RepCounter {
         State state = states.get(exercise);
         long currentTime = SystemClock.elapsedRealtime();
 
-        // Optimized rep trigger angles
         if (state == State.IDLE || state == State.UP) {
             if (angle > 160) { 
                 states.put(exercise, State.DOWN);
@@ -209,6 +204,9 @@ public class RepCounter {
                     lastRepTimes.put(exercise, currentTime);
                     incrementCount(exercise);
                 }
+            } else if (angle < 90 && angle > 45) {
+                // Potential feedback for half-reps
+                // if (formListener != null) formListener.onFormFeedback("Go higher!");
             }
         }
     }
@@ -235,7 +233,7 @@ public class RepCounter {
         long currentTime = SystemClock.elapsedRealtime();
 
         if (state == State.IDLE || state == State.UP) {
-            if (angle < 95) { 
+            if (angle < 100) { 
                 states.put(exercise, State.DOWN);
             }
         } else if (state == State.DOWN) {
@@ -245,7 +243,16 @@ public class RepCounter {
                     lastRepTimes.put(exercise, currentTime);
                     incrementCount(exercise);
                 }
+            } else if (angle > 120 && angle < 160) {
+                // Feedback for not going deep enough?
             }
+        }
+        
+        // Form Check: Back posture (simplified)
+        NormalizedLandmark nose = landmarks.get(0);
+        float hipAvgY = (rHip.y() + lHip.y()) / 2f;
+        if (nose.y() > hipAvgY) {
+           if (formListener != null) formListener.onFormFeedback("Keep chest up");
         }
     }
 
@@ -258,6 +265,7 @@ public class RepCounter {
         totalCounts.put(exercise, newTotal);
         
         int newSetCount = currentSetExerciseCounts.get(exercise) + 1;
+        currentSetExerciseCounts.get(exercise);
         currentSetExerciseCounts.put(exercise, newSetCount);
         
         currentSetTotalReps++;

@@ -51,9 +51,6 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private OverlayView overlayView;
     private TextView tvCount;
     private TextView tvExercise;
-    private TextView tvDebugAngles;
-    private TextView tvDebugYValues;
-    private Button btnEndSession;
     private View gestureFeedbackCard;
     private ProgressBar gestureProgressBar;
     
@@ -71,44 +68,40 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private long handsAboveHeadStartTime = -1;
     private static final long GESTURE_HOLD_MS = 3000;
 
+    // Bitmap reuse to reduce latency
+    private Bitmap sharedBitmap = null;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Keep the screen on while the app is active
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        // Handle Window Insets
         View mainView = findViewById(R.id.main);
-        ViewCompat.setOnApplyWindowInsetsListener(mainView, (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
-            return insets;
-        });
+        if (mainView != null) {
+            ViewCompat.setOnApplyWindowInsetsListener(mainView, (v, insets) -> {
+                Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+                v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
+                return insets;
+            });
+        }
 
         viewFinder = findViewById(R.id.viewFinder);
         overlayView = findViewById(R.id.overlayView);
         tvCount = findViewById(R.id.tvCount);
         tvExercise = findViewById(R.id.tvExercise);
-        tvDebugAngles = findViewById(R.id.tvDebugAngles);
-        tvDebugYValues = findViewById(R.id.tvDebugYValues);
-        btnEndSession = findViewById(R.id.btnEndSession);
+        Button btnEndSession = findViewById(R.id.btnEndSession);
         gestureFeedbackCard = findViewById(R.id.gestureFeedbackCard);
         gestureProgressBar = findViewById(R.id.gestureProgressBar);
 
         btnEndSession.setOnClickListener(v -> onSessionComplete());
 
-        // Initialize TextToSpeech
         tts = new TextToSpeech(this, this);
 
         repCounter = new RepCounter();
-        // Voice feedback listener
-        repCounter.setRepListener((exercise, count) -> {
-            speak(String.valueOf(count));
-        });
+        repCounter.setRepListener((exercise, count) -> speak(String.valueOf(count)));
 
-        // Form feedback listener
         repCounter.setFormListener(feedback -> {
             long currentTime = SystemClock.elapsedRealtime();
             if (currentTime - lastFeedbackTime > FEEDBACK_COOLDOWN_MS) {
@@ -125,7 +118,7 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
 
             @Override
             public void onSetFinished(WorkoutSet set) {
-                speak("Set finished. " + set.getTotalReps() + " reps of " + set.getCategory());
+                speak("Set finished. " + set.getTotalReps() + " reps");
             }
         });
 
@@ -141,7 +134,6 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     }
 
     private void speak(String text) {
-        // Prevent speaking if "End Session" gesture is active
         if (isTtsInitialized && tts != null && handsAboveHeadStartTime == -1) {
             tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null);
         }
@@ -150,14 +142,8 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     @Override
     public void onInit(int status) {
         if (status == TextToSpeech.SUCCESS) {
-            int result = tts.setLanguage(Locale.US);
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                Log.e(TAG, "Language not supported");
-            } else {
-                isTtsInitialized = true;
-            }
-        } else {
-            Log.e(TAG, "TTS Initialization failed");
+            tts.setLanguage(Locale.US);
+            isTtsInitialized = true;
         }
     }
 
@@ -170,21 +156,17 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         if (!isSessionActive) return;
         isSessionActive = false;
         
-        // Ensure any active set is finished
         repCounter.finishCurrentSet();
 
         long durationSeconds = (SystemClock.elapsedRealtime() - sessionStartTime) / 1000;
         Map<String, Integer> totalCounts = repCounter.getTotalCounts();
         List<WorkoutSet> completedSets = repCounter.getCompletedSets();
 
-        // Stop processing
         if (poseLandmarkerHelper != null) {
             poseLandmarkerHelper.close();
         }
 
         ExerciseSession session = new ExerciseSession(totalCounts, completedSets, durationSeconds);
-        
-        // SAVE SESSION PERSISTENTLY
         WorkoutManager.saveSession(this, session);
 
         Intent intent = new Intent(this, SummaryActivity.class);
@@ -214,22 +196,24 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                         image.close();
                         return;
                     }
-                    Bitmap bitmap = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
-                    bitmap.copyPixelsFromBuffer(image.getPlanes()[0].getBuffer());
+
+                    if (sharedBitmap == null || sharedBitmap.getWidth() != image.getWidth() || sharedBitmap.getHeight() != image.getHeight()) {
+                        sharedBitmap = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
+                    }
+                    
+                    sharedBitmap.copyPixelsFromBuffer(image.getPlanes()[0].getBuffer());
 
                     Matrix matrix = new Matrix();
                     matrix.postRotate(image.getImageInfo().getRotationDegrees());
                     matrix.postScale(-1f, 1f, (float) image.getWidth() / 2f, (float) image.getHeight() / 2f);
 
-                    Bitmap processedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, false);
+                    Bitmap processedBitmap = Bitmap.createBitmap(sharedBitmap, 0, 0, sharedBitmap.getWidth(), sharedBitmap.getHeight(), matrix, false);
 
                     poseLandmarkerHelper.detectLiveStream(processedBitmap);
                     image.close();
-                    bitmap.recycle(); // Reuse memory
                 });
 
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA;
-
                 cameraProvider.unbindAll();
                 cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis);
 
@@ -253,134 +237,99 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                 
                 checkHandsAboveHeadGesture(landmarks);
                 
-                // Only process exercise detection and rest logic if NOT in the "End Session" motion
                 if (handsAboveHeadStartTime == -1) {
                     checkRestGestures(landmarks);
                     repCounter.processLandmarks(landmarks);
                     
-                    if (repCounter.isResting()) {
-                        tvExercise.setText("FINISHED SET / RESTING");
-                        tvExercise.setTextColor(Color.YELLOW);
-                        tvCount.setText("0"); 
-                    } else {
-                        String category = repCounter.getActiveExerciseCategory();
-                        if (category.isEmpty()) {
-                            tvExercise.setText("Ready to start...");
-                            tvExercise.setTextColor(Color.WHITE);
-                            tvCount.setText("0");
-                        } else {
-                            tvExercise.setText(category);
-                            tvExercise.setTextColor(Color.GREEN);
-                            
-                            if (category.equals(RepCounter.CAT_BICEP_CURL)) {
-                                Map<String, Integer> counts = repCounter.getCurrentSetExerciseCounts();
-                                int left = counts.getOrDefault(RepCounter.BICEP_CURL_LEFT, 0);
-                                int right = counts.getOrDefault(RepCounter.BICEP_CURL_RIGHT, 0);
-                                tvCount.setText("L: " + left + "  R: " + right);
-                            } else {
-                                tvCount.setText(String.valueOf(repCounter.getCurrentSetTotalReps()));
-                            }
-                        }
-                    }
-                }
-
-                // Debug Info: Angles and Y values
-                if (landmarks.size() >= 33) {
-                    double rAngle = ExerciseUtils.calculateAngle(landmarks.get(23), landmarks.get(11), landmarks.get(13));
-                    double lAngle = ExerciseUtils.calculateAngle(landmarks.get(24), landmarks.get(12), landmarks.get(14));
-                    tvDebugAngles.setText(String.format(Locale.US, "Arm-Torso Angles: L:%.1f\u00b0 R:%.1f\u00b0", lAngle, rAngle));
-
-                    tvDebugYValues.setText(String.format(Locale.US, "Y Pos: LS:%.2f LW:%.2f | RS:%.2f RW:%.2f", 
-                        landmarks.get(12).y(), landmarks.get(16).y(), 
-                        landmarks.get(11).y(), landmarks.get(15).y()));
+                    updateUI();
                 }
             }
         });
     }
 
-    private void checkRestGestures(List<NormalizedLandmark> landmarks) {
-        if (landmarks.size() < 33) return;
+    @Override
+    public void onError(String error) {
+        runOnUiThread(() -> Toast.makeText(this, error, Toast.LENGTH_SHORT).show());
+    }
 
-        NormalizedLandmark lShoulder = landmarks.get(11); // Phys R
-        NormalizedLandmark rShoulder = landmarks.get(12); // Phys L
-        NormalizedLandmark lWrist = landmarks.get(15);
-        NormalizedLandmark rWrist = landmarks.get(16);
-        NormalizedLandmark lElbow = landmarks.get(13);
-        NormalizedLandmark rElbow = landmarks.get(14);
-
-        if (lWrist.visibility().orElse(0f) < 0.5f || rWrist.visibility().orElse(0f) < 0.5f ||
-            lShoulder.visibility().orElse(0f) < 0.5f || rShoulder.visibility().orElse(0f) < 0.5f) return;
-
-        double distRightHandToLeftShoulder = Math.sqrt(Math.pow(lWrist.x() - rShoulder.x(), 2) + Math.pow(lWrist.y() - rShoulder.y(), 2));
-        double distLeftHandToRightShoulder = Math.sqrt(Math.pow(rWrist.x() - lShoulder.x(), 2) + Math.pow(rWrist.y() - lShoulder.y(), 2));
-
-        // Finish set / start resting
-        if (distRightHandToLeftShoulder < 0.1f && distLeftHandToRightShoulder < 0.1f && !repCounter.isResting()) {
-            repCounter.setResting(true);
-            // setResting(true) now finishes the set in RepCounter
-        } 
-        
-        // Resume / start new set
+    private void updateUI() {
         if (repCounter.isResting()) {
-            boolean rRaised = lWrist.y() < lShoulder.y() && lElbow.y() < lShoulder.y();
-            boolean lRaised = rWrist.y() < rShoulder.y() && rElbow.y() < rShoulder.y();
-
-            if (rRaised ^ lRaised) {
-                repCounter.setResting(false);
-                speak("Ready for next set");
+            tvExercise.setText("FINISHED SET / RESTING");
+            tvExercise.setTextColor(Color.YELLOW);
+            tvCount.setText("0"); 
+        } else {
+            String category = repCounter.getActiveExerciseCategory();
+            if (category.isEmpty()) {
+                tvExercise.setText("Ready to start...");
+                tvExercise.setTextColor(Color.WHITE);
+                tvCount.setText("0");
+            } else {
+                tvExercise.setText(category);
+                tvExercise.setTextColor(Color.GREEN);
+                
+                if (category.equals(RepCounter.CAT_BICEP_CURL)) {
+                    Map<String, Integer> counts = repCounter.getCurrentSetExerciseCounts();
+                    Integer left = counts.getOrDefault(RepCounter.BICEP_CURL_LEFT, 0);
+                    Integer right = counts.getOrDefault(RepCounter.BICEP_CURL_RIGHT, 0);
+                    tvCount.setText("L: " + (left != null ? left : 0) + "  R: " + (right != null ? right : 0));
+                } else {
+                    tvCount.setText(String.valueOf(repCounter.getCurrentSetTotalReps()));
+                }
             }
         }
     }
 
     private void checkHandsAboveHeadGesture(List<NormalizedLandmark> landmarks) {
-        if (landmarks.size() < 20) {
-            resetGestureFeedback();
-            return;
-        }
+        NormalizedLandmark lWrist = landmarks.get(15);
+        NormalizedLandmark rWrist = landmarks.get(16);
+        NormalizedLandmark lShoulder = landmarks.get(11);
+        NormalizedLandmark rShoulder = landmarks.get(12);
 
-        NormalizedLandmark leftWrist = landmarks.get(15);
-        NormalizedLandmark rightWrist = landmarks.get(16);
-        NormalizedLandmark leftShoulder = landmarks.get(11);
-        NormalizedLandmark rightShoulder = landmarks.get(12);
-
-        if (leftWrist.visibility().orElse(0f) < 0.5f || rightWrist.visibility().orElse(0f) < 0.5f) {
-            resetGestureFeedback();
-            return;
-        }
-
-        boolean handsUp = leftWrist.y() < (leftShoulder.y() - 0.1f) && 
-                         rightWrist.y() < (rightShoulder.y() - 0.1f);
-
-        if (handsUp) {
+        float visThreshold = 0.5f;
+        if (lWrist.visibility().orElse(0f) > visThreshold && rWrist.visibility().orElse(0f) > visThreshold &&
+                lWrist.y() < lShoulder.y() && rWrist.y() < rShoulder.y()) {
+            
             if (handsAboveHeadStartTime == -1) {
                 handsAboveHeadStartTime = SystemClock.elapsedRealtime();
                 gestureFeedbackCard.setVisibility(View.VISIBLE);
-                // Immediately stop any current voice over
-                if (tts != null) {
-                    tts.stop();
-                }
             }
             
             long elapsed = SystemClock.elapsedRealtime() - handsAboveHeadStartTime;
-            gestureProgressBar.setProgress((int) elapsed);
+            gestureProgressBar.setProgress((int) ((elapsed / (float) GESTURE_HOLD_MS) * 100));
 
-            if (elapsed > GESTURE_HOLD_MS) {
+            if (elapsed >= GESTURE_HOLD_MS) {
                 onSessionComplete();
             }
         } else {
-            resetGestureFeedback();
+            handsAboveHeadStartTime = -1;
+            gestureFeedbackCard.setVisibility(View.GONE);
+            gestureProgressBar.setProgress(0);
         }
     }
 
-    private void resetGestureFeedback() {
-        handsAboveHeadStartTime = -1;
-        gestureFeedbackCard.setVisibility(View.GONE);
-        gestureProgressBar.setProgress(0);
-    }
+    private void checkRestGestures(List<NormalizedLandmark> landmarks) {
+        NormalizedLandmark lShoulder = landmarks.get(11);
+        NormalizedLandmark rShoulder = landmarks.get(12);
+        NormalizedLandmark lWrist = landmarks.get(15);
+        NormalizedLandmark rWrist = landmarks.get(16);
 
-    @Override
-    public void onError(String error) {
-        runOnUiThread(() -> Toast.makeText(this, error, Toast.LENGTH_SHORT).show());
+        float visThreshold = 0.5f;
+        if (lWrist.visibility().orElse(0f) > visThreshold && rWrist.visibility().orElse(0f) > visThreshold) {
+            boolean crossing = rWrist.x() < lWrist.x();
+            boolean isNearShoulders = lWrist.y() < lShoulder.y() + 0.1f && rWrist.y() < rShoulder.y() + 0.1f;
+            
+            if (crossing && isNearShoulders) {
+                if (!repCounter.isResting()) {
+                    repCounter.setResting(true);
+                    speak("Set complete. Resting.");
+                }
+            } else if (!crossing && !isNearShoulders) {
+                if (repCounter.isResting()) {
+                    repCounter.setResting(false);
+                    speak("Resuming workout.");
+                }
+            }
+        }
     }
 
     private boolean allPermissionsGranted() {
@@ -409,14 +358,10 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        isSessionActive = false;
+        cameraExecutor.shutdown();
         if (tts != null) {
             tts.stop();
             tts.shutdown();
-        }
-        cameraExecutor.shutdown();
-        if (poseLandmarkerHelper != null) {
-            poseLandmarkerHelper.close();
         }
     }
 }

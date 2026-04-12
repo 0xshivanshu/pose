@@ -9,7 +9,7 @@
         android:icon="@android:drawable/ic_menu_sort_by_size"
         android:title="Progress" />
     <item
-        android:id="@+id/navigation_streak"
-        android:icon="@android:drawable/btn_star_big_on"
-        android:title="Streak" />
+        android:id="@+id/navigation_logout"
+        android:icon="@android:drawable/ic_lock_power_off"
+        android:title="Logout" />
 </menu>

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "508036615298",
+    "project_id": "pose-607cb",
+    "storage_bucket": "pose-607cb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:508036615298:android:2a37eec656e742673ff89b",
+        "android_client_info": {
+          "package_name": "com.example.pose"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCIlbcBuhpjqrKx1H-vvsAcradXcWXriEw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
