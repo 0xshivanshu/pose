@@ -98,6 +98,9 @@ public class HomeActivity extends AppCompatActivity {
             return true;
         });
 
+        // Trigger Firebase Sync on start
+        WorkoutManager.syncFromFirebase(this, this::loadAndDisplayData);
+        
         loadAndDisplayData();
     }
 
@@ -113,34 +116,34 @@ public class HomeActivity extends AppCompatActivity {
     }
 
     private void loadAndDisplayData() {
-        last7DaysData = WorkoutManager.getLast7DaysSessions(this);
-        Map<String, List<ExerciseSession>> monthData = WorkoutManager.getMonthSessions(this);
-        
-        // Monthly Progress Calculation
-        int totalSetsThisMonth = 0;
-        for (List<ExerciseSession> sessions : monthData.values()) {
-            for (ExerciseSession s : sessions) totalSetsThisMonth += s.getCompletedSets().size();
-        }
+        // Wrap in UI thread just in case it's called from sync callback
+        runOnUiThread(() -> {
+            last7DaysData = WorkoutManager.getLast7DaysSessions(this);
+            Map<String, List<ExerciseSession>> monthData = WorkoutManager.getMonthSessions(this);
+            
+            int totalSetsThisMonth = 0;
+            for (List<ExerciseSession> sessions : monthData.values()) {
+                for (ExerciseSession s : sessions) totalSetsThisMonth += s.getCompletedSets().size();
+            }
 
-        // Update Streak & Monthly Info
-        int currentStreak = WorkoutManager.calculateCurrentStreak(this);
-        tvStreakCount.setText(currentStreak + " Day Streak");
-        
-        // Monthly Goal Progress (e.g., 50 sets a month)
-        int monthlyGoal = 50;
-        pbStreak.setMax(monthlyGoal);
-        pbStreak.setProgress(Math.min(monthlyGoal, totalSetsThisMonth));
-        
-        if (totalSetsThisMonth == 0) {
-            tvStreakMessage.setText("Start your first session this month!");
-        } else {
-            tvStreakMessage.setText(totalSetsThisMonth + " sets done this month!");
-        }
+            int currentStreak = WorkoutManager.calculateCurrentStreak(this);
+            tvStreakCount.setText(currentStreak + " Day Streak");
+            
+            int monthlyGoal = 50;
+            pbStreak.setMax(monthlyGoal);
+            pbStreak.setProgress(Math.min(monthlyGoal, totalSetsThisMonth));
+            
+            if (totalSetsThisMonth == 0) {
+                tvStreakMessage.setText("Start your first session this month!");
+            } else {
+                tvStreakMessage.setText(totalSetsThisMonth + " sets done this month!");
+            }
 
-        renderStreakCircles();
-        
-        String today = fullDateFormat.format(new Date());
-        displayDayReport(today, "Today's Report");
+            renderStreakCircles();
+            
+            String today = fullDateFormat.format(new Date());
+            displayDayReport(today, "Today's Report");
+        });
     }
 
     private void renderStreakCircles() {

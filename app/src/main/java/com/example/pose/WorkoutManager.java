@@ -4,6 +4,7 @@ import android.content.Context;
 import android.util.Log;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.SetOptions;
 import java.io.*;
@@ -14,6 +15,8 @@ public class WorkoutManager {
     private static final String TAG = "WorkoutManager";
     private static final String BASE_FOLDER = "user_workouts";
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+    // FIXED: Corrected collection name as per your structure
+    private static final String FIREBASE_COLLECTION = "daily_workouts";
 
     private static String getUserId() {
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
@@ -36,14 +39,9 @@ public class WorkoutManager {
         List<ExerciseSession> sessions = loadSessionsForDate(context, new Date());
         sessions.add(session);
 
-        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(file))) {
-            oos.writeObject(sessions);
-            Log.d(TAG, "Session saved locally for user " + getUserId() + " on " + today);
-        } catch (IOException e) {
-            Log.e(TAG, "Error saving local session", e);
-        }
+        saveToDisk(file, sessions);
 
-        // Sync to Firebase
+        // Sync to Firebase: users/{uid}/daily_workouts/{date}
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
         if (user != null) {
             FirebaseFirestore db = FirebaseFirestore.getInstance();
@@ -51,8 +49,18 @@ public class WorkoutManager {
             data.put("sessions", sessions);
 
             db.collection("users").document(user.getUid())
-                    .collection("daily_workouts").document(today)
-                    .set(data, SetOptions.merge());
+                    .collection(FIREBASE_COLLECTION).document(today)
+                    .set(data, SetOptions.merge())
+                    .addOnSuccessListener(aVoid -> Log.d(TAG, "Synced to Firebase: " + FIREBASE_COLLECTION))
+                    .addOnFailureListener(e -> Log.e(TAG, "Firebase sync failed", e));
+        }
+    }
+
+    private static void saveToDisk(File file, List<ExerciseSession> sessions) {
+        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(file))) {
+            oos.writeObject(sessions);
+        } catch (IOException e) {
+            Log.e(TAG, "Error saving local session", e);
         }
     }
 
@@ -70,6 +78,41 @@ public class WorkoutManager {
             Log.e(TAG, "Error loading local sessions for " + dateStr, e);
             return new ArrayList<>();
         }
+    }
+
+    public static void syncFromFirebase(Context context, Runnable onComplete) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) return;
+
+        FirebaseFirestore db = FirebaseFirestore.getInstance();
+        Log.d(TAG, "Starting sync from path: users/" + user.getUid() + "/" + FIREBASE_COLLECTION);
+        
+        db.collection("users").document(user.getUid()).collection(FIREBASE_COLLECTION)
+                .get()
+                .addOnSuccessListener(queryDocumentSnapshots -> {
+                    for (DocumentSnapshot doc : queryDocumentSnapshots.getDocuments()) {
+                        String dateStr = doc.getId();
+                        try {
+                            WorkoutDataWrapper wrapper = doc.toObject(WorkoutDataWrapper.class);
+                            if (wrapper != null && wrapper.sessions != null) {
+                                File file = new File(getUserFolder(context), dateStr + ".dat");
+                                saveToDisk(file, wrapper.sessions);
+                                Log.d(TAG, "Restored data for: " + dateStr);
+                            }
+                        } catch (Exception e) {
+                            Log.e(TAG, "Failed to parse data for " + dateStr, e);
+                        }
+                    }
+                    if (onComplete != null) onComplete.run();
+                })
+                .addOnFailureListener(e -> {
+                    Log.e(TAG, "Failed to fetch from Firebase", e);
+                    if (onComplete != null) onComplete.run();
+                });
+    }
+
+    public static class WorkoutDataWrapper implements Serializable {
+        public List<ExerciseSession> sessions;
     }
 
     public static Map<String, List<ExerciseSession>> getLast7DaysSessions(Context context) {
