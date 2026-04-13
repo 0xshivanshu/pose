@@ -12,16 +12,24 @@ import java.util.*;
 
 public class WorkoutManager {
     private static final String TAG = "WorkoutManager";
-    private static final String FOLDER_NAME = "workouts_v2";
+    private static final String BASE_FOLDER = "user_workouts";
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
 
-    public static synchronized void saveSession(Context context, ExerciseSession session) {
-        // 1. Save Locally
-        File folder = new File(context.getFilesDir(), FOLDER_NAME);
-        if (!folder.exists() && !folder.mkdirs()) {
-            Log.e(TAG, "Could not create workouts folder");
-        }
+    private static String getUserId() {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        return (user != null) ? user.getUid() : "guest";
+    }
 
+    private static File getUserFolder(Context context) {
+        File folder = new File(context.getFilesDir(), BASE_FOLDER + File.separator + getUserId());
+        if (!folder.exists() && !folder.mkdirs()) {
+            Log.e(TAG, "Could not create user folder");
+        }
+        return folder;
+    }
+
+    public static synchronized void saveSession(Context context, ExerciseSession session) {
+        File folder = getUserFolder(context);
         String today = DATE_FORMAT.format(new Date());
         File file = new File(folder, today + ".dat");
 
@@ -30,12 +38,12 @@ public class WorkoutManager {
 
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(file))) {
             oos.writeObject(sessions);
-            Log.d(TAG, "Session saved locally for " + today);
+            Log.d(TAG, "Session saved locally for user " + getUserId() + " on " + today);
         } catch (IOException e) {
-            Log.e(TAG, "Error saving session locally", e);
+            Log.e(TAG, "Error saving local session", e);
         }
 
-        // 2. Sync to Firebase if logged in
+        // Sync to Firebase
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
         if (user != null) {
             FirebaseFirestore db = FirebaseFirestore.getInstance();
@@ -44,15 +52,13 @@ public class WorkoutManager {
 
             db.collection("users").document(user.getUid())
                     .collection("daily_workouts").document(today)
-                    .set(data, SetOptions.merge())
-                    .addOnSuccessListener(aVoid -> Log.d(TAG, "Synced to Firebase for " + today))
-                    .addOnFailureListener(e -> Log.e(TAG, "Firebase sync failed", e));
+                    .set(data, SetOptions.merge());
         }
     }
 
     @SuppressWarnings("unchecked")
     public static synchronized List<ExerciseSession> loadSessionsForDate(Context context, Date date) {
-        File folder = new File(context.getFilesDir(), FOLDER_NAME);
+        File folder = getUserFolder(context);
         String dateStr = DATE_FORMAT.format(date);
         File file = new File(folder, dateStr + ".dat");
 
@@ -61,7 +67,7 @@ public class WorkoutManager {
         try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file))) {
             return (List<ExerciseSession>) ois.readObject();
         } catch (Exception e) {
-            Log.e(TAG, "Error loading local sessions", e);
+            Log.e(TAG, "Error loading local sessions for " + dateStr, e);
             return new ArrayList<>();
         }
     }

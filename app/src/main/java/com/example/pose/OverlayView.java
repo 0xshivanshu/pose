@@ -17,13 +17,14 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Custom view for rendering Pose Landmarker results with enhanced smoothing.
+ * Custom view for rendering Pose Landmarker results with balanced smoothing.
  */
 public class OverlayView extends View {
     private List<List<NormalizedLandmark>> smoothedLandmarks = null;
-    // Lower value = more smoothing (more reliance on previous frame). 
-    // Increased smoothing from 0.4 to 0.15 for maximum stability.
-    private static final float SMOOTHING_FACTOR = 0.15f; 
+    
+    // Balanced smoothing: 0.35 provides responsiveness while maintaining stability.
+    // This fixes the "wiggle" issue on fast movements like bicep curls.
+    private static final float SMOOTHING_FACTOR = 0.35f; 
     
     private Paint linePaint;
     private Paint pointPaint;
@@ -38,14 +39,14 @@ public class OverlayView extends View {
     private void initPaints() {
         linePaint = new Paint();
         linePaint.setColor(Color.CYAN);
-        linePaint.setStrokeWidth(12F); // Slightly thicker lines for better visibility
+        linePaint.setStrokeWidth(10F); 
         linePaint.setStyle(Paint.Style.STROKE);
         linePaint.setStrokeCap(Paint.Cap.ROUND);
         linePaint.setAntiAlias(true);
 
         pointPaint = new Paint();
         pointPaint.setColor(Color.YELLOW);
-        pointPaint.setStrokeWidth(14F);
+        pointPaint.setStrokeWidth(12F);
         pointPaint.setStyle(Paint.Style.FILL);
         pointPaint.setAntiAlias(true);
     }
@@ -80,7 +81,7 @@ public class OverlayView extends View {
                 NormalizedLandmark c = currentList.get(j);
                 NormalizedLandmark p = prevList.get(j);
 
-                // EMA: Smoothed = (Alpha * Current) + ((1 - Alpha) * Previous)
+                // EMA Smoothing logic
                 float sx = (SMOOTHING_FACTOR * c.x()) + ((1 - SMOOTHING_FACTOR) * p.x());
                 float sy = (SMOOTHING_FACTOR * c.y()) + ((1 - SMOOTHING_FACTOR) * p.y());
                 float sz = (SMOOTHING_FACTOR * c.z()) + ((1 - SMOOTHING_FACTOR) * p.z());
@@ -105,12 +106,11 @@ public class OverlayView extends View {
         float offsetX = (getWidth() - imageWidth * scale) / 2f;
         float offsetY = (getHeight() - imageHeight * scale) / 2f;
 
-        float minVisibility = 0.5f;
+        // Slightly lower visibility threshold for drawing to keep overlay visible in grainy light
+        float minVisibility = 0.4f;
 
         for (List<NormalizedLandmark> landmarks : smoothedLandmarks) {
-            // 1. Draw Skeleton Connections
             for (Connection connection : PoseLandmarker.POSE_LANDMARKS) {
-                // Filter out face connections (landmarks 0-10)
                 if (connection.start() <= 10 || connection.end() <= 10) continue;
 
                 NormalizedLandmark start = landmarks.get(connection.start());
@@ -127,17 +127,14 @@ public class OverlayView extends View {
                 }
             }
 
-            // 2. Draw Joint Points
             for (int i = 0; i < landmarks.size(); i++) {
-                // Filter out face points (0-10)
                 if (i <= 10) continue;
-
                 NormalizedLandmark landmark = landmarks.get(i);
                 if (landmark.visibility().orElse(0f) > minVisibility) {
                     canvas.drawCircle(
                             landmark.x() * imageWidth * scale + offsetX,
                             landmark.y() * imageHeight * scale + offsetY,
-                            8f, // Slightly larger joints
+                            6f,
                             pointPaint
                     );
                 }
