@@ -5,9 +5,14 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class WorkoutSet implements Serializable {
-    private final String category;
-    private final Map<String, Integer> exerciseCounts;
-    private final long durationMillis;
+    private String category;
+    private Map<String, Integer> exerciseCounts;
+    private long durationMillis;
+
+    // No-argument constructor for Firebase
+    public WorkoutSet() {
+        this.exerciseCounts = new HashMap<>();
+    }
 
     public WorkoutSet(String category, Map<String, Integer> exerciseCounts, long durationMillis) {
         this.category = category;
@@ -37,8 +42,10 @@ public class WorkoutSet implements Serializable {
 
     public int getTotalReps() {
         int total = 0;
-        for (int count : exerciseCounts.values()) {
-            total += count;
+        if (exerciseCounts != null) {
+            for (int count : exerciseCounts.values()) {
+                total += count;
+            }
         }
         return total;
     }

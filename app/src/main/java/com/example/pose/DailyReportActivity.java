@@ -1,10 +1,10 @@
 package com.example.pose;
 
-import android.graphics.Color;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.CalendarView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -15,23 +15,25 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import com.google.android.material.card.MaterialCardView;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
 public class DailyReportActivity extends AppCompatActivity {
 
     private MuscleHeatmapView detailHeatmap;
-    private TextView tvDetailTitle, tvMuscleAnalysis;
+    private TextView tvDetailTitle, tvMuscleAnalysis, tvBreakdownLabel;
     private RecyclerView rvExerciseDetails;
-    private final SimpleDateFormat displayFormat = new SimpleDateFormat("MMMM dd, yyyy", Locale.US);
+    private MaterialCardView cvStatsContainer;
+    private CalendarView calendarView;
     private final SimpleDateFormat storageFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+    private final SimpleDateFormat displayFormat = new SimpleDateFormat("MMMM dd, yyyy", Locale.US);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_daily_report);
 
-        // Handle Window Insets
         View rootView = findViewById(R.id.daily_report_root);
         if (rootView != null) {
             ViewCompat.setOnApplyWindowInsetsListener(rootView, (v, insets) -> {
@@ -44,26 +46,54 @@ public class DailyReportActivity extends AppCompatActivity {
         detailHeatmap = findViewById(R.id.detailHeatmap);
         tvDetailTitle = findViewById(R.id.tvDetailTitle);
         tvMuscleAnalysis = findViewById(R.id.tvMuscleAnalysis);
+        tvBreakdownLabel = findViewById(R.id.tvBreakdownLabel);
         rvExerciseDetails = findViewById(R.id.rvExerciseDetails);
+        cvStatsContainer = findViewById(R.id.cvStatsContainer);
+        calendarView = findViewById(R.id.calendarView);
         ImageButton btnBack = findViewById(R.id.btnBack);
 
         btnBack.setOnClickListener(v -> finish());
 
-        String dateKey = getIntent().getStringExtra("selected_date");
-        if (dateKey != null) {
-            try {
-                Date d = storageFormat.parse(dateKey);
+        rvExerciseDetails.setLayoutManager(new LinearLayoutManager(this));
+
+        calendarView.setOnDateChangeListener((view, year, month, dayOfMonth) -> {
+            Calendar cal = Calendar.getInstance();
+            cal.set(year, month, dayOfMonth);
+            String selectedDate = storageFormat.format(cal.getTime());
+            tvDetailTitle.setText(displayFormat.format(cal.getTime()));
+            loadData(selectedDate);
+        });
+
+        // Initialize with today or intent date
+        String initialDate = getIntent().getStringExtra("selected_date");
+        if (initialDate == null) initialDate = storageFormat.format(new Date());
+        
+        try {
+            Date d = storageFormat.parse(initialDate);
+            if (d != null) {
+                calendarView.setDate(d.getTime());
                 tvDetailTitle.setText(displayFormat.format(d));
-            } catch (Exception e) {
-                tvDetailTitle.setText("Session Details");
             }
-            loadData(dateKey);
-        }
+        } catch (Exception ignored) {}
+        
+        loadData(initialDate);
     }
 
     private void loadData(String dateKey) {
         List<ExerciseSession> sessions = WorkoutManager.loadSessionsForDate(this, parseDate(dateKey));
         
+        if (sessions == null || sessions.isEmpty()) {
+            cvStatsContainer.setVisibility(View.GONE);
+            tvBreakdownLabel.setVisibility(View.GONE);
+            rvExerciseDetails.setVisibility(View.GONE);
+            tvMuscleAnalysis.setText("No workout recorded for this day.");
+            return;
+        }
+
+        cvStatsContainer.setVisibility(View.VISIBLE);
+        tvBreakdownLabel.setVisibility(View.VISIBLE);
+        rvExerciseDetails.setVisibility(View.VISIBLE);
+
         Map<String, List<WorkoutSet>> exerciseGroups = new LinkedHashMap<>();
         Map<String, Integer> muscleReps = new HashMap<>();
 
@@ -72,13 +102,12 @@ public class DailyReportActivity extends AppCompatActivity {
                 String cat = set.getCategory();
                 if (!exerciseGroups.containsKey(cat)) exerciseGroups.put(cat, new ArrayList<>());
                 exerciseGroups.get(cat).add(set);
-                
                 muscleReps.put(cat, muscleReps.getOrDefault(cat, 0) + set.getTotalReps());
             }
         }
 
         updateHeatmap(muscleReps);
-        setupRecyclerView(exerciseGroups);
+        rvExerciseDetails.setAdapter(new ExerciseGroupAdapter(exerciseGroups));
         updateAnalysis(muscleReps);
     }
 
@@ -88,7 +117,7 @@ public class DailyReportActivity extends AppCompatActivity {
     }
 
     private void updateHeatmap(Map<String, Integer> muscleReps) {
-        final float MAX_REPS = 24f; // Updated to 24
+        final float MAX_REPS = 24f;
         for (MuscleHeatmapView.MuscleGroup group : MuscleHeatmapView.MuscleGroup.values()) {
             detailHeatmap.setIntensity(group, 0);
         }
@@ -108,17 +137,7 @@ public class DailyReportActivity extends AppCompatActivity {
         List<String> muscles = new ArrayList<>();
         if (muscleReps.containsKey(RepCounter.CAT_BICEP_CURL)) muscles.add("Biceps");
         if (muscleReps.containsKey(RepCounter.CAT_SQUAT)) muscles.add("Lower Body");
-
-        if (muscles.isEmpty()) {
-            tvMuscleAnalysis.setText("No data recorded");
-        } else {
-            tvMuscleAnalysis.setText("Primary Focus: " + String.join(" & ", muscles));
-        }
-    }
-
-    private void setupRecyclerView(Map<String, List<WorkoutSet>> groups) {
-        rvExerciseDetails.setLayoutManager(new LinearLayoutManager(this));
-        rvExerciseDetails.setAdapter(new ExerciseGroupAdapter(groups));
+        tvMuscleAnalysis.setText("Primary Focus: " + (muscles.isEmpty() ? "None" : String.join(" & ", muscles)));
     }
 
     private static class ExerciseGroupAdapter extends RecyclerView.Adapter<ExerciseGroupAdapter.ViewHolder> {
@@ -143,26 +162,18 @@ public class DailyReportActivity extends AppCompatActivity {
             List<WorkoutSet> sets = groups.get(cat);
             holder.tvTitle.setText(cat);
             holder.tvSetsCount.setText(sets.size() + (sets.size() == 1 ? " Set" : " Sets"));
-            
             int totalReps = 0;
             for (WorkoutSet s : sets) totalReps += s.getTotalReps();
-            holder.tvTotalReps.setText(totalReps + " Reps");
+            holder.tvTotalReps.setText(totalReps + " Total Reps");
 
             holder.llSetsContainer.removeAllViews();
             for (int i = 0; i < sets.size(); i++) {
                 WorkoutSet set = sets.get(i);
                 View setView = LayoutInflater.from(holder.itemView.getContext()).inflate(R.layout.item_set_detail_row, holder.llSetsContainer, false);
                 ((TextView) setView.findViewById(R.id.tvSetNum)).setText("SET " + (i + 1));
-                
-                String repDetails;
-                if (cat.equals(RepCounter.CAT_BICEP_CURL)) {
-                    repDetails = "L:" + set.getLeftReps() + " R:" + set.getRightReps();
-                } else {
-                    repDetails = String.valueOf(set.getTotalReps());
-                }
+                String repDetails = cat.equals(RepCounter.CAT_BICEP_CURL) ? "L:" + set.getLeftReps() + " R:" + set.getRightReps() : String.valueOf(set.getTotalReps());
                 ((TextView) setView.findViewById(R.id.tvRepCount)).setText(repDetails);
                 ((TextView) setView.findViewById(R.id.tvDuration)).setText(set.getDurationMillis() / 1000 + "s");
-                
                 holder.llSetsContainer.addView(setView);
             }
         }

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/daily_report_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -28,7 +29,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
-            android:text="Session Details"
+            android:text="Workout Progress"
             android:textColor="@android:color/white"
             android:textSize="20sp"
             android:textStyle="bold" />
@@ -46,9 +47,28 @@
             android:orientation="vertical"
             android:padding="16dp">
 
+            <!-- Calendar Card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                app:cardBackgroundColor="#1AFFFFFF"
+                app:cardCornerRadius="24dp"
+                app:cardElevation="0dp">
+
+                <CalendarView
+                    android:id="@+id/calendarView"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:dateTextAppearance="@android:style/TextAppearance.Medium"
+                    android:weekDayTextAppearance="@android:style/TextAppearance.Small" />
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cvStatsContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone"
                 app:cardBackgroundColor="#1AFFFFFF"
                 app:cardCornerRadius="24dp"
                 app:cardElevation="0dp">
@@ -70,7 +90,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="16dp"
-                        android:text="Focus: Biceps &amp; Quads"
+                        android:text="Select a date to see focus"
                         android:textColor="#2196F3"
                         android:textSize="16sp"
                         android:textStyle="bold" />
@@ -78,10 +98,12 @@
             </com.google.android.material.card.MaterialCardView>
 
             <TextView
+                android:id="@+id/tvBreakdownLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="24dp"
                 android:text="EXERCISE BREAKDOWN"
+                android:visibility="gone"
                 android:textColor="#B3FFFFFF"
                 android:textSize="12sp"
                 android:letterSpacing="0.1"

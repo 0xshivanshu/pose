@@ -121,12 +121,14 @@ public class RepCounter {
             return;
         }
 
-        // SWAPPED L/R for Mirrored Front Camera
-        // MediaPipe 12 (Right side of image) -> Physical Left
-        // MediaPipe 11 (Left side of image) -> Physical Right
+        // Standard MediaPipe Landmark Mapping:
+        // Landmark 11, 13, 15, 23 = Anatomical Left
+        // Landmark 12, 14, 16, 24 = Anatomical Right
+        // We use these directly as RepCounter should handle logical sides, 
+        // regardless of screen mirroring.
         if (activeExerciseCategory.isEmpty() || activeExerciseCategory.equals(CAT_BICEP_CURL)) {
-            processBicepCurl(landmarks.get(12), landmarks.get(14), landmarks.get(16), landmarks.get(24), BICEP_CURL_LEFT);
-            processBicepCurl(landmarks.get(11), landmarks.get(13), landmarks.get(15), landmarks.get(23), BICEP_CURL_RIGHT);
+            processBicepCurl(landmarks.get(11), landmarks.get(13), landmarks.get(15), landmarks.get(23), BICEP_CURL_LEFT);
+            processBicepCurl(landmarks.get(12), landmarks.get(14), landmarks.get(16), landmarks.get(24), BICEP_CURL_RIGHT);
         }
         
         if (activeExerciseCategory.isEmpty() || activeExerciseCategory.equals(CAT_SQUAT)) {
@@ -204,9 +206,6 @@ public class RepCounter {
                     lastRepTimes.put(exercise, currentTime);
                     incrementCount(exercise);
                 }
-            } else if (angle < 90 && angle > 45) {
-                // Potential feedback for half-reps
-                // if (formListener != null) formListener.onFormFeedback("Go higher!");
             }
         }
     }
@@ -243,8 +242,6 @@ public class RepCounter {
                     lastRepTimes.put(exercise, currentTime);
                     incrementCount(exercise);
                 }
-            } else if (angle > 120 && angle < 160) {
-                // Feedback for not going deep enough?
             }
         }
         
@@ -265,7 +262,6 @@ public class RepCounter {
         totalCounts.put(exercise, newTotal);
         
         int newSetCount = currentSetExerciseCounts.get(exercise) + 1;
-        currentSetExerciseCounts.get(exercise);
         currentSetExerciseCounts.put(exercise, newSetCount);
         
         currentSetTotalReps++;

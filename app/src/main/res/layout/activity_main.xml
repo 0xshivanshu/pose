@@ -27,37 +27,6 @@
         app:layout_constraintStart_toStartOf="@id/viewFinder"
         app:layout_constraintTop_toTopOf="@id/viewFinder" />
 
-    <!-- Debug Overlay -->
-    <LinearLayout
-        android:id="@+id/debugOverlay"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_margin="16dp"
-        android:background="#80000000"
-        android:orientation="vertical"
-        android:padding="8dp"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/headerLayout">
-
-        <TextView
-            android:id="@+id/tvDebugAngles"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Angles: L: -- R: --"
-            android:textColor="#00FF00"
-            android:textSize="12sp"
-            android:fontFamily="monospace"/>
-
-        <TextView
-            android:id="@+id/tvDebugYValues"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Y: S:-- W:--"
-            android:textColor="#00FF00"
-            android:textSize="12sp"
-            android:fontFamily="monospace"/>
-    </LinearLayout>
-
     <!-- Modern Header UI -->
     <LinearLayout
         android:id="@+id/headerLayout"
@@ -139,6 +108,38 @@
         </com.google.android.material.card.MaterialCardView>
     </LinearLayout>
 
+    <!-- Big Rest Timer Overlay -->
+    <LinearLayout
+        android:id="@+id/restTimerContainer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        tools:visibility="visible">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="REST TIME"
+            android:textColor="#FFC107"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvRestTimer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="00:00"
+            android:textColor="@android:color/white"
+            android:textSize="84sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <!-- Gesture Progress Overlay -->
     <com.google.android.material.card.MaterialCardView
         android:id="@+id/gestureFeedbackCard"
@@ -150,8 +151,7 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        tools:visibility="visible">
+        app:layout_constraintTop_toTopOf="parent">
         
         <LinearLayout
             android:layout_width="wrap_content"

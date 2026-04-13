@@ -32,6 +32,7 @@ public class HomeActivity extends AppCompatActivity {
     private final SimpleDateFormat fullDateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
     private String selectedDateKey;
     private FirebaseAuth mAuth;
+    private BottomNavigationView bottomNavigation;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -79,7 +80,7 @@ public class HomeActivity extends AppCompatActivity {
             startActivity(intent);
         });
 
-        BottomNavigationView bottomNavigation = findViewById(R.id.bottomNavigation);
+        bottomNavigation = findViewById(R.id.bottomNavigation);
         bottomNavigation.setSelectedItemId(R.id.navigation_workout);
         bottomNavigation.setOnItemSelectedListener(item -> {
             int itemId = item.getItemId();
@@ -104,31 +105,40 @@ public class HomeActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         if (mAuth.getCurrentUser() != null) {
+            if (bottomNavigation != null) {
+                bottomNavigation.setSelectedItemId(R.id.navigation_workout);
+            }
             loadAndDisplayData();
         }
     }
 
     private void loadAndDisplayData() {
         last7DaysData = WorkoutManager.getLast7DaysSessions(this);
+        Map<String, List<ExerciseSession>> monthData = WorkoutManager.getMonthSessions(this);
         
-        // Update Streak Info
+        // Monthly Progress Calculation
+        int totalSetsThisMonth = 0;
+        for (List<ExerciseSession> sessions : monthData.values()) {
+            for (ExerciseSession s : sessions) totalSetsThisMonth += s.getCompletedSets().size();
+        }
+
+        // Update Streak & Monthly Info
         int currentStreak = WorkoutManager.calculateCurrentStreak(this);
         tvStreakCount.setText(currentStreak + " Day Streak");
-        pbStreak.setProgress(Math.min(7, currentStreak));
         
-        if (currentStreak == 0) {
-            tvStreakMessage.setText("Start your first session!");
-        } else if (currentStreak < 3) {
-            tvStreakMessage.setText("Great start! Keep it up.");
-        } else if (currentStreak < 7) {
-            tvStreakMessage.setText("You're on fire!");
+        // Monthly Goal Progress (e.g., 50 sets a month)
+        int monthlyGoal = 50;
+        pbStreak.setMax(monthlyGoal);
+        pbStreak.setProgress(Math.min(monthlyGoal, totalSetsThisMonth));
+        
+        if (totalSetsThisMonth == 0) {
+            tvStreakMessage.setText("Start your first session this month!");
         } else {
-            tvStreakMessage.setText("Weekly goal achieved!");
+            tvStreakMessage.setText(totalSetsThisMonth + " sets done this month!");
         }
 
         renderStreakCircles();
         
-        // Default to today
         String today = fullDateFormat.format(new Date());
         displayDayReport(today, "Today's Report");
     }
@@ -137,7 +147,6 @@ public class HomeActivity extends AppCompatActivity {
         llStreakContainer.removeAllViews();
         String todayStr = fullDateFormat.format(new Date());
         
-        // Get the dates and sort them to ensure chronological order
         List<String> sortedDates = new ArrayList<>(last7DaysData.keySet());
         Collections.sort(sortedDates);
         
@@ -228,12 +237,11 @@ public class HomeActivity extends AppCompatActivity {
             tvHomeMusclesHit.setText(sb.toString());
         }
         
-        // Reset Heatmap
         for (MuscleHeatmapView.MuscleGroup group : MuscleHeatmapView.MuscleGroup.values()) {
             homeMuscleHeatmap.setIntensity(group, 0);
         }
 
-        final float MAX_REPS = 24f; // Updated to 24
+        final float MAX_REPS = 24f;
         if (muscleReps.containsKey(RepCounter.CAT_BICEP_CURL)) {
             homeMuscleHeatmap.setIntensity(MuscleHeatmapView.MuscleGroup.BICEPS, muscleReps.get(RepCounter.CAT_BICEP_CURL) / MAX_REPS);
         }

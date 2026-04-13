@@ -4,10 +4,11 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.speech.tts.TextToSpeech;
 import android.util.Log;
@@ -55,6 +56,24 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private View gestureFeedbackCard;
     private ProgressBar gestureProgressBar;
     
+    // Rest Timer UI
+    private View restTimerContainer;
+    private TextView tvRestTimer;
+    private long restStartTime = 0;
+    private final Handler timerHandler = new Handler(Looper.getMainLooper());
+    private final Runnable timerRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (repCounter != null && repCounter.isResting() && restStartTime > 0) {
+                long elapsedSeconds = (SystemClock.elapsedRealtime() - restStartTime) / 1000;
+                long minutes = elapsedSeconds / 60;
+                long seconds = elapsedSeconds % 60;
+                tvRestTimer.setText(String.format(Locale.US, "%02d:%02d", minutes, seconds));
+                timerHandler.postDelayed(this, 1000);
+            }
+        }
+    };
+
     private PoseLandmarkerHelper poseLandmarkerHelper;
     private RepCounter repCounter;
     private ExecutorService cameraExecutor;
@@ -68,12 +87,10 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private boolean isSessionActive = false;
     private long handsAboveHeadStartTime = -1;
     private static final long GESTURE_HOLD_MS = 3000;
+    private int completedSetsCount = 0;
 
-    // Latency optimization: Shared resources
+    // Bitmap reuse for latency
     private Bitmap sharedBitmap = null;
-    private Bitmap processedBitmap = null;
-    private Canvas processedCanvas = null;
-    private Matrix drawMatrix = new Matrix();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -98,13 +115,25 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         Button btnEndSession = findViewById(R.id.btnEndSession);
         gestureFeedbackCard = findViewById(R.id.gestureFeedbackCard);
         gestureProgressBar = findViewById(R.id.gestureProgressBar);
+        
+        restTimerContainer = findViewById(R.id.restTimerContainer);
+        tvRestTimer = findViewById(R.id.tvRestTimer);
 
         btnEndSession.setOnClickListener(v -> onSessionComplete());
 
         tts = new TextToSpeech(this, this);
 
         repCounter = new RepCounter();
-        repCounter.setRepListener((exercise, count) -> speak(String.valueOf(count)));
+        repCounter.setRepListener((exercise, count) -> {
+            // SWAPPED L/R TTS
+            if (exercise.equals(RepCounter.BICEP_CURL_LEFT)) {
+                speak("Right " + count);
+            } else if (exercise.equals(RepCounter.BICEP_CURL_RIGHT)) {
+                speak("Left " + count);
+            } else {
+                speak(String.valueOf(count));
+            }
+        });
 
         repCounter.setFormListener(feedback -> {
             long currentTime = SystemClock.elapsedRealtime();
@@ -118,11 +147,27 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
             @Override
             public void onSetStarted(String category) {
                 speak("Started " + category);
+                runOnUiThread(() -> {
+                    restTimerContainer.setVisibility(View.GONE);
+                    timerHandler.removeCallbacks(timerRunnable);
+                });
             }
 
             @Override
             public void onSetFinished(WorkoutSet set) {
+                completedSetsCount++;
                 speak("Set finished. " + set.getTotalReps() + " reps");
+                
+                // Water reminder logic
+                if (completedSetsCount % 2 == 0) {
+                    speak("Great job! Don't forget to drink some water.");
+                }
+                
+                runOnUiThread(() -> {
+                    restTimerContainer.setVisibility(View.VISIBLE);
+                    restStartTime = SystemClock.elapsedRealtime();
+                    timerHandler.post(timerRunnable);
+                });
             }
         });
 
@@ -139,7 +184,7 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
 
     private void speak(String text) {
         if (isTtsInitialized && tts != null && handsAboveHeadStartTime == -1) {
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null);
+            tts.speak(text, TextToSpeech.QUEUE_ADD, null, null); 
         }
     }
 
@@ -154,29 +199,36 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
     private void startSession() {
         sessionStartTime = SystemClock.elapsedRealtime();
         isSessionActive = true;
+        completedSetsCount = 0;
     }
 
     private void onSessionComplete() {
         if (!isSessionActive) return;
         isSessionActive = false;
         
+        // Save current set if it has reps
         repCounter.finishCurrentSet();
 
-        long durationSeconds = (SystemClock.elapsedRealtime() - sessionStartTime) / 1000;
-        Map<String, Integer> totalCounts = repCounter.getTotalCounts();
-        List<WorkoutSet> completedSets = repCounter.getCompletedSets();
+        // Run saving logic in background thread to avoid ANR/Crash
+        new Thread(() -> {
+            long durationSeconds = (SystemClock.elapsedRealtime() - sessionStartTime) / 1000;
+            Map<String, Integer> totalCounts = repCounter.getTotalCounts();
+            List<WorkoutSet> completedSets = repCounter.getCompletedSets();
 
-        if (poseLandmarkerHelper != null) {
-            poseLandmarkerHelper.close();
-        }
+            ExerciseSession session = new ExerciseSession(totalCounts, completedSets, durationSeconds);
+            WorkoutManager.saveSession(this, session);
 
-        ExerciseSession session = new ExerciseSession(totalCounts, completedSets, durationSeconds);
-        WorkoutManager.saveSession(this, session);
-
-        Intent intent = new Intent(this, SummaryActivity.class);
-        intent.putExtra("EXERCISE_SESSION", session);
-        startActivity(intent);
-        finish();
+            runOnUiThread(() -> {
+                if (poseLandmarkerHelper != null) {
+                    poseLandmarkerHelper.close();
+                }
+                
+                Intent intent = new Intent(this, SummaryActivity.class);
+                intent.putExtra("EXERCISE_SESSION", session);
+                startActivity(intent);
+                finish();
+            });
+        }).start();
     }
 
     private void startCamera() {
@@ -201,27 +253,17 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                         return;
                     }
 
-                    // Strict latency optimization: Avoid all allocations in the loop
                     if (sharedBitmap == null || sharedBitmap.getWidth() != image.getWidth() || sharedBitmap.getHeight() != image.getHeight()) {
                         sharedBitmap = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
-                        
-                        int rotation = image.getImageInfo().getRotationDegrees();
-                        int targetW = (rotation % 180 == 0) ? image.getWidth() : image.getHeight();
-                        int targetH = (rotation % 180 == 0) ? image.getHeight() : image.getWidth();
-                        
-                        processedBitmap = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888);
-                        processedCanvas = new Canvas(processedBitmap);
-                        
-                        drawMatrix.reset();
-                        drawMatrix.postRotate(rotation);
-                        
-                        float centerX = targetW / 2f;
-                        float centerY = targetH / 2f;
-                        drawMatrix.postScale(-1f, 1f, centerX, centerY);
                     }
                     
                     sharedBitmap.copyPixelsFromBuffer(image.getPlanes()[0].getBuffer());
-                    processedCanvas.drawBitmap(sharedBitmap, drawMatrix, null);
+
+                    Matrix matrix = new Matrix();
+                    matrix.postRotate(image.getImageInfo().getRotationDegrees());
+                    matrix.postScale(-1f, 1f, (float) image.getWidth() / 2f, (float) image.getHeight() / 2f);
+
+                    Bitmap processedBitmap = Bitmap.createBitmap(sharedBitmap, 0, 0, sharedBitmap.getWidth(), sharedBitmap.getHeight(), matrix, false);
 
                     poseLandmarkerHelper.detectLiveStream(processedBitmap);
                     image.close();
@@ -282,9 +324,10 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                 
                 if (category.equals(RepCounter.CAT_BICEP_CURL)) {
                     Map<String, Integer> counts = repCounter.getCurrentSetExerciseCounts();
-                    Integer left = counts.getOrDefault(RepCounter.BICEP_CURL_LEFT, 0);
-                    Integer right = counts.getOrDefault(RepCounter.BICEP_CURL_RIGHT, 0);
-                    tvCount.setText("L: " + (left != null ? left : 0) + "  R: " + (right != null ? right : 0));
+                    // SWAPPED L/R UI
+                    Integer leftVal = counts.getOrDefault(RepCounter.BICEP_CURL_LEFT, 0);
+                    Integer rightVal = counts.getOrDefault(RepCounter.BICEP_CURL_RIGHT, 0);
+                    tvCount.setText("L: " + (rightVal != null ? rightVal : 0) + "  R: " + (leftVal != null ? leftVal : 0));
                 } else {
                     tvCount.setText(String.valueOf(repCounter.getCurrentSetTotalReps()));
                 }
@@ -329,18 +372,18 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
         float visThreshold = 0.5f;
         if (lWrist.visibility().orElse(0f) > visThreshold && rWrist.visibility().orElse(0f) > visThreshold) {
             
-            // MIRRORED VIEW LOGIC:
-            // Landmark 16 (Physical Right) has smaller X than Landmark 15 (Physical Left) normally.
-            // When crossed, Landmark 16.x > Landmark 15.x.
+            // MIRRORED VIEW LOGIC (Corrected for mirrored X coordinates)
+            // Normal: 16.x < 15.x
+            // Crossed: 16.x > 15.x
             boolean crossing = rWrist.x() > lWrist.x();
             
-            // Touching opposite shoulders while crossed:
-            // Physical Left Wrist (15) near Physical Right Shoulder (12)
+            // Proximity check: Physical Left Wrist (15) near Physical Right Shoulder (12)
             // Physical Right Wrist (16) near Physical Left Shoulder (11)
+            // Increased distance slightly to 0.10 for comfort, but removed vertical limit
             double distLtoR = Math.sqrt(Math.pow(lWrist.x() - rShoulder.x(), 2) + Math.pow(lWrist.y() - rShoulder.y(), 2));
             double distRtoL = Math.sqrt(Math.pow(rWrist.x() - lShoulder.x(), 2) + Math.pow(rWrist.y() - lShoulder.y(), 2));
             
-            boolean touchingShoulders = distLtoR < 0.15 && distRtoL < 0.15;
+            boolean touchingShoulders = distLtoR < 0.10 && distRtoL < 0.10;
             
             if (crossing && touchingShoulders) {
                 if (!repCounter.isResting()) {
@@ -348,7 +391,7 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
                     speak("Set complete. Resting.");
                 }
             } else if (lWrist.y() < lShoulder.y() - 0.05 || rWrist.y() < rShoulder.y() - 0.05) {
-                // Resume when at least one hand is raised above shoulder level
+                // Resume when hands are raised significantly above shoulders
                 if (repCounter.isResting()) {
                     repCounter.setResting(false);
                     speak("Resuming workout.");
@@ -388,5 +431,6 @@ public class MainActivity extends AppCompatActivity implements PoseLandmarkerHel
             tts.stop();
             tts.shutdown();
         }
+        timerHandler.removeCallbacks(timerRunnable);
     }
 }
