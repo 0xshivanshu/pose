@@ -1,10 +1,10 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.google.services)
 }
 
 android {
     namespace = "com.example.pose"
-    // Reverted to API 35 (Stable) as we downgraded to stable androidx libraries
     compileSdk = 35
 
     defaultConfig {
@@ -33,9 +33,6 @@ android {
 
     packaging {
         jniLibs {
-            // Fix for 16 KB page size compatibility with MediaPipe native libraries.
-            // This forces native libraries to be extracted on the device,
-            // avoiding the alignment issue in the APK on newer 16 KB devices.
             useLegacyPackaging = true
         }
     }
@@ -47,6 +44,11 @@ dependencies {
     implementation(libs.activity)
     implementation(libs.constraintlayout)
 
+    // Firebase
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.firestore)
+
     // MediaPipe
     implementation(libs.mediapipe.tasks.vision)
 
@@ -56,8 +58,8 @@ dependencies {
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.view)
 
-    // Guava (for ListenableFuture in CameraX)
     implementation("com.google.guava:guava:33.0.0-android")
+    implementation(libs.gson)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)

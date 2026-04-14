@@ -16,34 +16,23 @@ import java.util.Map;
 public class RepCounter {
     private final Map<String, Integer> totalCounts = new HashMap<>();
     private final List<WorkoutSet> completedSets = new ArrayList<>();
-    
     private final Map<String, Integer> currentSetExerciseCounts = new HashMap<>();
-    private final List<ExerciseTracker> activeTrackers = new ArrayList<>();
-    
-    private String activeExerciseCategory = ""; 
+
+    private String activeExerciseId = "";
+    private String activeExerciseCategory = "";
     private int currentSetTotalReps = 0;
     private String lastDetectedExercise = "";
     private int totalReps = 0;
     private boolean isResting = false;
     private long resumeTime = 0;
     private static final long RESUME_COOLDOWN_MS = 1000;
-    private static final float SMOOTHING_ALPHA = 0.45f;
-    private static final long MIN_REP_INTERVAL_MS = 800;
-    private static final long FEEDBACK_COOLDOWN_MS = 2000;
-    private long lastFeedbackTime = 0;
-    
     private long setStartTime = 0;
 
     private RepListener repListener;
     private FormListener formListener;
     private SetListener setListener;
-    
-    public static final String BICEP_CURL_LEFT = "Left Bicep Curl";
-    public static final String BICEP_CURL_RIGHT = "Right Bicep Curl";
-    public static final String SQUAT = "Squat";
-    
-    public static final String CAT_BICEP_CURL = "Bicep Curl";
-    public static final String CAT_SQUAT = "Squat";
+
+    private final List<ExerciseTracker> activeTrackers = new ArrayList<>();
 
     public interface RepListener {
         void onRepCompleted(String exercise, int count);
@@ -52,27 +41,18 @@ public class RepCounter {
     public interface FormListener {
         void onFormFeedback(String feedback);
     }
-    
+
     public interface SetListener {
         void onSetStarted(String category);
         void onSetFinished(WorkoutSet set);
     }
 
-    public void setRepListener(RepListener listener) {
-        this.repListener = listener;
-    }
-
-    public void setFormListener(FormListener listener) {
-        this.formListener = listener;
-    }
-
-    public void setSetListener(SetListener listener) {
-        this.setListener = listener;
-    }
+    public void setRepListener(RepListener listener) { this.repListener = listener; }
+    public void setFormListener(FormListener listener) { this.formListener = listener; }
+    public void setSetListener(SetListener listener) { this.setListener = listener; }
 
     public RepCounter(Context context) {
         loadExercises(context);
-        resetSetCounts();
     }
 
     private void loadExercises(Context context) {
@@ -80,63 +60,50 @@ public class RepCounter {
             InputStream is = context.getAssets().open("exercises.json");
             int size = is.available();
             byte[] buffer = new byte[size];
-            is.read(buffer);
+            int read = is.read(buffer);
             is.close();
-            String json = new String(buffer, StandardCharsets.UTF_8);
-            JSONArray array = new JSONArray(json);
+            if (read > 0) {
+                String json = new String(buffer, 0, read, StandardCharsets.UTF_8);
+                JSONArray array = new JSONArray(json);
 
-            for (int i = 0; i < array.length(); i++) {
-                JSONObject obj = array.getJSONObject(i);
-                ExerciseDefinition def = new ExerciseDefinition(obj);
-                
-                if (def.isBilateral) {
-                    String tracker1Label = def.name + " (L)";
-                    String tracker2Label = def.name + " (R)";
-                    
-                    if (def.sideInversion) {
-                        if (def.id.equals("bicep_curl")) {
-                            tracker1Label = BICEP_CURL_RIGHT; 
-                            tracker2Label = BICEP_CURL_LEFT;  
-                        } else {
-                            tracker1Label = def.name + " (R)";
-                            tracker2Label = def.name + " (L)";
-                        }
+                for (int i = 0; i < array.length(); i++) {
+                    ExerciseDefinition def = new ExerciseDefinition(array.getJSONObject(i));
+
+                    if (def.isBilateral) {
+                        String labelL = def.name + " (L)";
+                        String labelR = def.name + " (R)";
+
+                        String tracker1Label = def.sideInversion ? labelR : labelL;
+                        String tracker2Label = def.sideInversion ? labelL : labelR;
+
+                        activeTrackers.add(new ExerciseTracker(def, false, tracker1Label)); // Phys Left
+                        activeTrackers.add(new ExerciseTracker(def, true, tracker2Label));  // Phys Right
+                        totalCounts.put(tracker1Label, 0);
+                        totalCounts.put(tracker2Label, 0);
+                    } else {
+                        activeTrackers.add(new ExerciseTracker(def, false, def.name));
+                        totalCounts.put(def.name, 0);
                     }
-
-                    activeTrackers.add(new ExerciseTracker(def, false, tracker1Label));
-                    activeTrackers.add(new ExerciseTracker(def, true, tracker2Label));
-                    
-                    totalCounts.put(tracker1Label, 0);
-                    totalCounts.put(tracker2Label, 0);
-                    currentSetExerciseCounts.put(tracker1Label, 0);
-                    currentSetExerciseCounts.put(tracker2Label, 0);
-                } else {
-                    String name = def.name;
-                    if (def.id.equals("squat")) name = SQUAT;
-                    activeTrackers.add(new ExerciseTracker(def, false, name));
-                    totalCounts.put(name, 0);
-                    currentSetExerciseCounts.put(name, 0);
                 }
             }
+            resetSetCounts();
         } catch (Exception e) {
             Log.e("RepCounter", "Error loading exercises", e);
         }
     }
 
     private void resetSetCounts() {
+        currentSetExerciseCounts.clear();
         for (String key : totalCounts.keySet()) {
             currentSetExerciseCounts.put(key, 0);
         }
         currentSetTotalReps = 0;
     }
 
-    public boolean isResting() {
-        return isResting;
-    }
+    public boolean isResting() { return isResting; }
 
     public void setResting(boolean resting) {
         if (this.isResting == resting) return;
-        
         this.isResting = resting;
         if (resting) {
             finishCurrentSet();
@@ -156,30 +123,20 @@ public class RepCounter {
 
     public void processLandmarks(List<NormalizedLandmark> landmarks) {
         if (isResting || landmarks.size() < 33) return;
-
-        long now = SystemClock.elapsedRealtime();
-        if (now - resumeTime < RESUME_COOLDOWN_MS) {
-            return;
-        }
+        if (SystemClock.elapsedRealtime() - resumeTime < RESUME_COOLDOWN_MS) return;
 
         for (ExerciseTracker tracker : activeTrackers) {
-            if (activeExerciseCategory.isEmpty() || activeExerciseCategory.equals(tracker.def.name)) {
-                tracker.process(landmarks, now);
+            if (activeExerciseCategory.isEmpty() || activeExerciseCategory.equals(tracker.definition.name)) {
+                // Pass current rep count for this specific tracker to handle "First Rep" rules
+                Integer count = currentSetExerciseCounts.get(tracker.label);
+                tracker.process(landmarks, count == null ? 0 : count);
             }
         }
     }
 
-    private String getCategory(String exercise) {
-        if (exercise.contains("Bicep Curl")) return CAT_BICEP_CURL;
-        if (exercise.equals(SQUAT)) return CAT_SQUAT;
-        for (ExerciseTracker t : activeTrackers) {
-            if (t.label.equals(exercise)) return t.def.name;
-        }
-        return "";
-    }
-
-    private void startSet(String exercise) {
-        activeExerciseCategory = getCategory(exercise);
+    private void startSet(String exerciseId, String category) {
+        activeExerciseId = exerciseId;
+        activeExerciseCategory = category;
         resetSetCounts();
         setStartTime = SystemClock.elapsedRealtime();
         if (setListener != null) {
@@ -191,52 +148,75 @@ public class RepCounter {
         if (!activeExerciseCategory.isEmpty() && currentSetTotalReps > 0) {
             long duration = SystemClock.elapsedRealtime() - setStartTime;
             Map<String, Integer> setCounts = new HashMap<>();
-            if (activeExerciseCategory.equals(CAT_BICEP_CURL)) {
-                setCounts.put(BICEP_CURL_LEFT, currentSetExerciseCounts.getOrDefault(BICEP_CURL_LEFT, 0));
-                setCounts.put(BICEP_CURL_RIGHT, currentSetExerciseCounts.getOrDefault(BICEP_CURL_RIGHT, 0));
-            } else if (activeExerciseCategory.equals(CAT_SQUAT)) {
-                setCounts.put(SQUAT, currentSetTotalReps);
-            } else {
-                for (Map.Entry<String, Integer> entry : currentSetExerciseCounts.entrySet()) {
-                    if (getCategory(entry.getKey()).equals(activeExerciseCategory)) {
-                        setCounts.put(entry.getKey(), entry.getValue());
-                    }
+            for (Map.Entry<String, Integer> entry : currentSetExerciseCounts.entrySet()) {
+                Integer val = entry.getValue();
+                if (val != null && val > 0) {
+                    setCounts.put(entry.getKey(), val);
                 }
             }
-            
-            WorkoutSet set = new WorkoutSet(activeExerciseCategory, setCounts, duration);
+
+            WorkoutSet set = new WorkoutSet(activeExerciseId, activeExerciseCategory, setCounts, duration);
             completedSets.add(set);
             if (setListener != null) {
                 setListener.onSetFinished(set);
             }
         }
+        activeExerciseId = "";
         activeExerciseCategory = "";
         resetSetCounts();
         setStartTime = 0;
     }
 
-    private void incrementCount(String exercise) {
+    private void incrementCount(String label, String exerciseId, String category) {
         if (activeExerciseCategory.isEmpty()) {
-            startSet(exercise);
+            startSet(exerciseId, category);
         }
-        
-        totalCounts.put(exercise, totalCounts.getOrDefault(exercise, 0) + 1);
-        currentSetExerciseCounts.put(exercise, currentSetExerciseCounts.getOrDefault(exercise, 0) + 1);
-        
+
+        Integer total = totalCounts.get(label);
+        totalCounts.put(label, (total == null ? 0 : total) + 1);
+
+        Integer current = currentSetExerciseCounts.get(label);
+        int newVal = (current == null ? 0 : current) + 1;
+        currentSetExerciseCounts.put(label, newVal);
+
         currentSetTotalReps++;
         totalReps++;
-        lastDetectedExercise = exercise;
-        
+        lastDetectedExercise = label;
+
         if (repListener != null) {
-            repListener.onRepCompleted(exercise, currentSetExerciseCounts.get(exercise));
+            repListener.onRepCompleted(label, newVal);
+        }
+    }
+
+    public String getCurrentSetDisplayString() {
+        if (activeExerciseCategory.isEmpty()) return "0";
+        
+        StringBuilder sb = new StringBuilder();
+        boolean hasMultiple = false;
+        int countWithReps = 0;
+
+        for (Map.Entry<String, Integer> entry : currentSetExerciseCounts.entrySet()) {
+            String label = entry.getKey();
+            if (label.startsWith(activeExerciseCategory)) {
+                countWithReps++;
+                if (label.contains("(") && label.contains(")")) {
+                    hasMultiple = true;
+                    String part = label.substring(label.indexOf("(") + 1, label.indexOf(")"));
+                    sb.append(part).append(": ").append(entry.getValue()).append("  ");
+                }
+            }
+        }
+
+        if (hasMultiple) {
+            return sb.toString().trim();
+        } else {
+            return String.valueOf(currentSetTotalReps);
         }
     }
 
     private static class ExerciseDefinition {
-        String id;
-        String name;
-        boolean isBilateral;
-        boolean sideInversion;
+        String id, name;
+        boolean isBilateral, sideInversion;
         List<Checkpoint> checkpoints = new ArrayList<>();
         List<Constraint> constraints = new ArrayList<>();
 
@@ -244,16 +224,18 @@ public class RepCounter {
             id = json.getString("id");
             name = json.getString("name");
             isBilateral = json.getBoolean("isBilateral");
-            sideInversion = json.optBoolean("sideInversion", false);
-            
+            sideInversion = json.getBoolean("sideInversion");
+
             JSONArray cpArray = json.getJSONArray("checkpoints");
             for (int i = 0; i < cpArray.length(); i++) {
                 checkpoints.add(new Checkpoint(cpArray.getJSONObject(i)));
             }
-            
-            JSONArray consArray = json.getJSONArray("constraints");
-            for (int i = 0; i < consArray.length(); i++) {
-                constraints.add(new Constraint(consArray.getJSONObject(i)));
+
+            if (json.has("constraints")) {
+                JSONArray cArray = json.getJSONArray("constraints");
+                for (int i = 0; i < cArray.length(); i++) {
+                    constraints.add(new Constraint(cArray.getJSONObject(i)));
+                }
             }
         }
     }
@@ -273,10 +255,9 @@ public class RepCounter {
     }
 
     private static class Constraint {
-        String type;
+        String type, feedback;
         double threshold;
         int[] joints;
-        String feedback;
 
         Constraint(JSONObject json) throws Exception {
             type = json.getString("type");
@@ -289,26 +270,19 @@ public class RepCounter {
     }
 
     private class ExerciseTracker {
-        final ExerciseDefinition def;
+        final ExerciseDefinition definition;
+        final boolean isRightSide;
         final String label;
         int currentCheckpointIndex = 0;
-        double smoothedAngle = -1;
         long lastRepTime = 0;
-        
-        // PRE-MAPPED JOINTS FOR ZERO-ALLOCATION LOOP
-        private final List<int[]> mappedCheckpointJoints = new ArrayList<>();
-        private final List<int[]> mappedConstraintJoints = new ArrayList<>();
+        double smoothedAngle = -1;
+        private static final float SMOOTHING_ALPHA = 0.45f;
+        private static final long MIN_REP_INTERVAL_MS = 800;
 
-        ExerciseTracker(ExerciseDefinition def, boolean isSwapped, String label) {
-            this.def = def;
+        ExerciseTracker(ExerciseDefinition def, boolean isRightSide, String label) {
+            this.definition = def;
+            this.isRightSide = isRightSide;
             this.label = label;
-            
-            for (Checkpoint cp : def.checkpoints) {
-                mappedCheckpointJoints.add(mapJoints(cp.joints, isSwapped));
-            }
-            for (Constraint c : def.constraints) {
-                mappedConstraintJoints.add(mapJoints(c.joints, isSwapped));
-            }
         }
 
         void reset() {
@@ -316,74 +290,95 @@ public class RepCounter {
             smoothedAngle = -1;
         }
 
-        void process(List<NormalizedLandmark> landmarks, long now) {
-            // 1. Process Constraints
-            for (int i = 0; i < def.constraints.size(); i++) {
-                Constraint c = def.constraints.get(i);
-                int[] joints = mappedConstraintJoints.get(i);
-                
-                if (checkVisibility(landmarks, joints)) {
-                    double angle = ExerciseUtils.calculateAngle(landmarks.get(joints[0]), landmarks.get(joints[1]), landmarks.get(joints[2]));
-                    boolean violated = false;
-                    if (c.type.equals("greater_than") && angle > c.threshold) violated = true;
-                    else if (c.type.equals("less_than") && angle < c.threshold) violated = true;
-                    
-                    if (violated) {
-                        if (formListener != null && !activeExerciseCategory.isEmpty()) {
-                            if (now - lastFeedbackTime > FEEDBACK_COOLDOWN_MS) {
-                                formListener.onFormFeedback(c.feedback);
-                                lastFeedbackTime = now;
-                            }
+        void process(List<NormalizedLandmark> landmarks, int currentCount) {
+            if (currentCheckpointIndex >= definition.checkpoints.size()) return;
+            Checkpoint cp = definition.checkpoints.get(currentCheckpointIndex);
+            int[] mappedJoints = mapJoints(cp.joints);
+            if (!checkVisibility(landmarks, mappedJoints)) return;
+
+            double rawVal = calculateValue(landmarks, mappedJoints);
+            if (smoothedAngle < 0) smoothedAngle = rawVal;
+            smoothedAngle = smoothedAngle + SMOOTHING_ALPHA * (rawVal - smoothedAngle);
+
+            // Rule 1: Zero form feedback during the first rep of a set (currentCount == 0).
+            // Coaching and correcting (resets) only start on the second rep (currentCount >= 1).
+            boolean coachingStarted = currentCount >= 1;
+
+            // Rule 2: Avoid nagging when not actively moving.
+            // We only coach if the user has moved significantly (25 degrees) away from the start gate.
+            boolean isMovingThroughRep = false;
+            if (currentCheckpointIndex > 0) {
+                double startThreshold = definition.checkpoints.get(0).threshold;
+                if (Math.abs(smoothedAngle - startThreshold) >= 25) {
+                    isMovingThroughRep = true;
+                }
+            }
+
+            // Only provide form feedback and enforce correcting resets if coaching has started.
+            if (coachingStarted && isMovingThroughRep) {
+                for (Constraint c : definition.constraints) {
+                    int[] constraintMapped = mapJoints(c.joints);
+                    if (!checkVisibility(landmarks, constraintMapped)) continue;
+                    double val = calculateValue(landmarks, constraintMapped);
+                    if (isThresholdMet(val, c.threshold, c.type)) {
+                        if (formListener != null) {
+                            formListener.onFormFeedback(c.feedback);
                         }
-                        reset(); 
+                        // CORRECTING: Stop the current rep and force a reset if form is bad.
+                        reset();
                         return;
                     }
                 }
             }
 
-            // 2. Process Checkpoints
-            if (currentCheckpointIndex >= def.checkpoints.size()) currentCheckpointIndex = 0;
-            Checkpoint cp = def.checkpoints.get(currentCheckpointIndex);
-            int[] joints = mappedCheckpointJoints.get(currentCheckpointIndex);
-
-            if (checkVisibility(landmarks, joints)) {
-                double rawAngle = ExerciseUtils.calculateAngle(landmarks.get(joints[0]), landmarks.get(joints[1]), landmarks.get(joints[2]));
-                if (smoothedAngle == -1) smoothedAngle = rawAngle;
-                smoothedAngle = smoothedAngle + SMOOTHING_ALPHA * (rawAngle - smoothedAngle);
-
-                boolean satisfied = false;
-                if (cp.type.equals("greater_than") && smoothedAngle > cp.threshold) satisfied = true;
-                else if (cp.type.equals("less_than") && smoothedAngle < cp.threshold) satisfied = true;
-
-                if (satisfied) {
-                    currentCheckpointIndex++;
-                    if (currentCheckpointIndex >= def.checkpoints.size()) {
-                        if (now - lastRepTime > MIN_REP_INTERVAL_MS) {
-                            incrementCount(label);
-                            lastRepTime = now;
-                        }
-                        currentCheckpointIndex = 0;
+            // Check if we hit the current checkpoint
+            if (isThresholdMet(smoothedAngle, cp.threshold, cp.type)) {
+                currentCheckpointIndex++;
+                if (currentCheckpointIndex >= definition.checkpoints.size()) {
+                    long now = SystemClock.elapsedRealtime();
+                    if (now - lastRepTime > MIN_REP_INTERVAL_MS) {
+                        incrementCount(label, definition.id, definition.name);
+                        lastRepTime = now;
                     }
+                    currentCheckpointIndex = 0;
                 }
             }
         }
 
-        private int[] mapJoints(int[] original, boolean isSwapped) {
-            if (!isSwapped) return original;
-            int[] swapped = new int[original.length];
-            for (int i = 0; i < original.length; i++) {
-                int j = original[i];
-                if (j % 2 != 0) swapped[i] = j + 1; 
-                else swapped[i] = j - 1; 
+        private int[] mapJoints(int[] joints) {
+            if (!isRightSide) return joints;
+            int[] mapped = new int[joints.length];
+            for (int i = 0; i < joints.length; i++) {
+                int j = joints[i];
+                if (j >= 11 && j <= 32) {
+                    mapped[i] = (j % 2 == 0) ? j - 1 : j + 1;
+                } else {
+                    mapped[i] = j;
+                }
             }
-            return swapped;
+            return mapped;
         }
 
         private boolean checkVisibility(List<NormalizedLandmark> landmarks, int[] joints) {
             for (int j : joints) {
-                if (landmarks.get(j).visibility().orElse(0f) < 0.5f) return false;
+                if (j < 0 || j >= landmarks.size()) return false;
+                NormalizedLandmark landmark = landmarks.get(j);
+                if (landmark.visibility().orElse(0f) < 0.5f) return false;
             }
             return true;
+        }
+
+        private double calculateValue(List<NormalizedLandmark> landmarks, int[] joints) {
+            if (joints.length == 3) {
+                return ExerciseUtils.calculateAngle(landmarks.get(joints[0]), landmarks.get(joints[1]), landmarks.get(joints[2]));
+            }
+            return 0;
+        }
+
+        private boolean isThresholdMet(double val, double threshold, String type) {
+            if ("greater_than".equals(type)) return val > threshold;
+            if ("less_than".equals(type)) return val < threshold;
+            return false;
         }
     }
 

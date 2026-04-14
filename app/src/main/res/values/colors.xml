@@ -1,5 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Core Backgrounds -->
+    <color name="bg_main">#121212</color>
+    <color name="bg_surface">#1A1A1A</color>
+    
+    <!-- Brand Accents (Slate & Muted Orange) -->
+    <color name="accent_primary">#8E9AAF</color> <!-- Slate Blue -->
+    <color name="accent_secondary">#D88C6C</color> <!-- Muted Orange -->
+    
+    <!-- Typography -->
+    <color name="text_high_emphasis">#F5F5F5</color>
+    <color name="text_medium_emphasis">#9CA3AF</color>
+    <color name="text_low_emphasis">#4B5563</color>
+    
+    <!-- UI Elements -->
+    <color name="divider_thin">#262626</color>
+    <color name="status_success">#7DBE9F</color>
+    <color name="status_warning">#E2C18D</color>
+
+    <!-- Legacy / System compatibility -->
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="bg_raw">#121212</color>
+    <color name="accent_raw">#8E9AAF</color>
 </resources>

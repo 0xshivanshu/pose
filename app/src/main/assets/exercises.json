@@ -9,7 +9,10 @@
       { "type": "less_than", "threshold": 45, "joints": [11, 13, 15] }
     ],
     "constraints": [
-      { "type": "greater_than", "threshold": 40, "joints": [23, 11, 13], "feedback": "Keep elbow in" }
+      { "type": "greater_than", "threshold": 60, "joints": [23, 11, 13], "feedback": "Keep elbow in" }
+    ],
+    "muscles": [
+      { "group": "BICEPS", "factor": 1.0 }
     ]
   },
   {
@@ -18,9 +21,135 @@
     "isBilateral": false,
     "sideInversion": false,
     "checkpoints": [
-      { "type": "less_than", "threshold": 95, "joints": [24, 26, 28] },
-      { "type": "greater_than", "threshold": 160, "joints": [24, 26, 28] }
+      {
+        "type": "greater_than",
+        "threshold": 169,
+        "joints": [
+          23,
+          25,
+          27
+        ]
+      },
+      {
+        "type": "less_than",
+        "threshold": 51,
+        "joints": [
+          23,
+          25,
+          27
+        ]
+      }
     ],
-    "constraints": []
+    "constraints": [
+      {
+        "type": "less_than",
+        "threshold": 121,
+        "joints": [
+          11,
+          23,
+          25
+        ],
+        "feedback": "Keep your hips level"
+      },
+      {
+        "type": "greater_than",
+        "threshold": 126,
+        "joints": [
+          24,
+          23,
+          25
+        ],
+        "feedback": "Maintain proper form"
+      }
+    ],
+    "muscles": [
+      { "group": "QUADS", "factor": 1.0 },
+      { "group": "GLUTES", "factor": 0.7 },
+      { "group": "HAMSTRINGS", "factor": 0.4 }
+    ]
+  },
+  {
+    "id": "lateral_raise",
+    "name": "Lateral Raise",
+    "isBilateral": true,
+    "sideInversion": true,
+    "checkpoints": [
+      {
+        "type": "greater_than",
+        "threshold": 86,
+        "joints": [
+          23,
+          11,
+          13
+        ]
+      },
+      {
+        "type": "less_than",
+        "threshold": 22,
+        "joints": [
+          23,
+          11,
+          13
+        ]
+      }
+    ],
+    "constraints": [
+      {
+        "type": "less_than",
+        "threshold": 159,
+        "joints": [
+          25,
+          23,
+          11
+        ],
+        "feedback": "Keep your torso upright, avoid leaning"
+      }
+    ],
+    "muscles": [
+      { "group": "SHOULDERS", "factor": 1.0 }
+    ]
+  },
+  {
+    "id": "high_knees",
+    "name": "High Knees",
+    "isBilateral": true,
+    "sideInversion": true,
+    "checkpoints": [
+      {
+        "type": "less_than",
+        "threshold": 10,
+        "joints": [
+          23,
+          25,
+          27
+        ]
+      },
+      {
+        "type": "greater_than",
+        "threshold": 169,
+        "joints": [
+          23,
+          25,
+          27
+        ]
+      }
+    ],
+    "constraints": [
+      {
+        "type": "greater_than",
+        "threshold": 109,
+        "joints": [
+          24,
+          23,
+          25
+        ],
+        "feedback": "Maintain proper form"
+      }
+    ],
+    "muscles": [
+      { "group": "QUADS", "factor": 0.6 },
+      { "group": "CALVES", "factor": 0.4 },
+      { "group": "ABS", "factor": 0.8 }
+    ]
   }
 ]

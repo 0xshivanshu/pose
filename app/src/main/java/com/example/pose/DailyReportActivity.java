@@ -1,10 +1,10 @@
 package com.example.pose;
 
-import android.graphics.Color;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.CalendarView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -15,23 +15,26 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import com.google.android.material.card.MaterialCardView;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
 public class DailyReportActivity extends AppCompatActivity {
 
     private MuscleHeatmapView detailHeatmap;
-    private TextView tvDetailTitle, tvMuscleAnalysis;
+    private TextView tvDetailTitle, tvMuscleAnalysis, tvBreakdownLabel;
     private RecyclerView rvExerciseDetails;
-    private final SimpleDateFormat displayFormat = new SimpleDateFormat("MMMM dd, yyyy", Locale.US);
+    private View cvStatsContainer;
+    private CalendarView calendarView;
     private final SimpleDateFormat storageFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+    private final SimpleDateFormat displayFormat = new SimpleDateFormat("MMMM dd, yyyy", Locale.US);
+    private List<WorkoutManager.ExerciseMuscleInfo> muscleInfoList;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_daily_report);
 
-        // Handle Window Insets
         View rootView = findViewById(R.id.daily_report_root);
         if (rootView != null) {
             ViewCompat.setOnApplyWindowInsetsListener(rootView, (v, insets) -> {
@@ -44,42 +47,72 @@ public class DailyReportActivity extends AppCompatActivity {
         detailHeatmap = findViewById(R.id.detailHeatmap);
         tvDetailTitle = findViewById(R.id.tvDetailTitle);
         tvMuscleAnalysis = findViewById(R.id.tvMuscleAnalysis);
+        tvBreakdownLabel = findViewById(R.id.tvBreakdownLabel);
         rvExerciseDetails = findViewById(R.id.rvExerciseDetails);
+        cvStatsContainer = findViewById(R.id.cvStatsContainer);
+        calendarView = findViewById(R.id.calendarView);
         ImageButton btnBack = findViewById(R.id.btnBack);
 
         btnBack.setOnClickListener(v -> finish());
 
-        String dateKey = getIntent().getStringExtra("selected_date");
-        if (dateKey != null) {
-            try {
-                Date d = storageFormat.parse(dateKey);
+        rvExerciseDetails.setLayoutManager(new LinearLayoutManager(this));
+
+        calendarView.setOnDateChangeListener((view, year, month, dayOfMonth) -> {
+            Calendar cal = Calendar.getInstance();
+            cal.set(year, month, dayOfMonth);
+            String selectedDate = storageFormat.format(cal.getTime());
+            tvDetailTitle.setText(displayFormat.format(cal.getTime()));
+            loadData(selectedDate);
+        });
+
+        muscleInfoList = WorkoutManager.getExerciseMuscleInfo(this);
+
+        // Initialize with today or intent date
+        String initialDate = getIntent().getStringExtra("selected_date");
+        if (initialDate == null) initialDate = storageFormat.format(new Date());
+
+        try {
+            Date d = storageFormat.parse(initialDate);
+            if (d != null) {
+                calendarView.setDate(d.getTime());
                 tvDetailTitle.setText(displayFormat.format(d));
-            } catch (Exception e) {
-                tvDetailTitle.setText("Session Details");
             }
-            loadData(dateKey);
-        }
+        } catch (Exception ignored) {}
+
+        loadData(initialDate);
     }
 
     private void loadData(String dateKey) {
         List<ExerciseSession> sessions = WorkoutManager.loadSessionsForDate(this, parseDate(dateKey));
-        
+
+        if (sessions == null || sessions.isEmpty()) {
+            cvStatsContainer.setVisibility(View.GONE);
+            tvBreakdownLabel.setVisibility(View.GONE);
+            rvExerciseDetails.setVisibility(View.GONE);
+            tvMuscleAnalysis.setText("No workout recorded for this day.");
+            return;
+        }
+
+        cvStatsContainer.setVisibility(View.VISIBLE);
+        tvBreakdownLabel.setVisibility(View.VISIBLE);
+        rvExerciseDetails.setVisibility(View.VISIBLE);
+
         Map<String, List<WorkoutSet>> exerciseGroups = new LinkedHashMap<>();
-        Map<String, Integer> muscleReps = new HashMap<>();
+        Map<String, Integer> exerciseReps = new HashMap<>();
 
         for (ExerciseSession session : sessions) {
             for (WorkoutSet set : session.getCompletedSets()) {
                 String cat = set.getCategory();
+                String id = set.getExerciseId();
                 if (!exerciseGroups.containsKey(cat)) exerciseGroups.put(cat, new ArrayList<>());
                 exerciseGroups.get(cat).add(set);
-                
-                muscleReps.put(cat, muscleReps.getOrDefault(cat, 0) + set.getTotalReps());
+                exerciseReps.put(id, exerciseReps.getOrDefault(id, 0) + set.getTotalReps());
             }
         }
 
-        updateHeatmap(muscleReps);
-        setupRecyclerView(exerciseGroups);
-        updateAnalysis(muscleReps);
+        updateHeatmap(exerciseReps);
+        rvExerciseDetails.setAdapter(new ExerciseGroupAdapter(exerciseGroups));
+        updateAnalysis(exerciseReps);
     }
 
     private Date parseDate(String dateStr) {
@@ -87,38 +120,64 @@ public class DailyReportActivity extends AppCompatActivity {
         catch (Exception e) { return new Date(); }
     }
 
-    private void updateHeatmap(Map<String, Integer> muscleReps) {
-        final float MAX_REPS = 24f; // Updated to 24
+    private void updateHeatmap(Map<String, Integer> exerciseReps) {
+        final float MAX_REPS = 24f;
         for (MuscleHeatmapView.MuscleGroup group : MuscleHeatmapView.MuscleGroup.values()) {
             detailHeatmap.setIntensity(group, 0);
         }
 
-        if (muscleReps.containsKey(RepCounter.CAT_BICEP_CURL)) {
-            detailHeatmap.setIntensity(MuscleHeatmapView.MuscleGroup.BICEPS, muscleReps.get(RepCounter.CAT_BICEP_CURL) / MAX_REPS);
+        Map<MuscleHeatmapView.MuscleGroup, Float> groupIntensities = new HashMap<>();
+
+        for (Map.Entry<String, Integer> entry : exerciseReps.entrySet()) {
+            String id = entry.getKey();
+            int reps = entry.getValue();
+            float intensityBase = reps / MAX_REPS;
+
+            for (WorkoutManager.ExerciseMuscleInfo info : muscleInfoList) {
+                if (info.id.equals(id)) {
+                    for (Map.Entry<MuscleHeatmapView.MuscleGroup, Float> mEntry : info.muscles.entrySet()) {
+                        MuscleHeatmapView.MuscleGroup group = mEntry.getKey();
+                        float factor = mEntry.getValue();
+                        float current = groupIntensities.getOrDefault(group, 0f);
+                        groupIntensities.put(group, current + (intensityBase * factor));
+                    }
+                }
+            }
         }
-        if (muscleReps.containsKey(RepCounter.CAT_SQUAT)) {
-            float intensity = muscleReps.get(RepCounter.CAT_SQUAT) / MAX_REPS;
-            detailHeatmap.setIntensity(MuscleHeatmapView.MuscleGroup.QUADS, intensity);
-            detailHeatmap.setIntensity(MuscleHeatmapView.MuscleGroup.GLUTES, intensity * 0.8f);
-            detailHeatmap.setIntensity(MuscleHeatmapView.MuscleGroup.HAMSTRINGS, intensity * 0.6f);
+
+        for (Map.Entry<MuscleHeatmapView.MuscleGroup, Float> entry : groupIntensities.entrySet()) {
+            detailHeatmap.setIntensity(entry.getKey(), entry.getValue());
         }
     }
 
-    private void updateAnalysis(Map<String, Integer> muscleReps) {
-        List<String> muscles = new ArrayList<>();
-        if (muscleReps.containsKey(RepCounter.CAT_BICEP_CURL)) muscles.add("Biceps");
-        if (muscleReps.containsKey(RepCounter.CAT_SQUAT)) muscles.add("Lower Body");
-
-        if (muscles.isEmpty()) {
-            tvMuscleAnalysis.setText("No data recorded");
-        } else {
-            tvMuscleAnalysis.setText("Primary Focus: " + String.join(" & ", muscles));
+    private void updateAnalysis(Map<String, Integer> exerciseReps) {
+        Set<String> muscles = new HashSet<>();
+        for (String id : exerciseReps.keySet()) {
+            for (WorkoutManager.ExerciseMuscleInfo info : muscleInfoList) {
+                if (info.id.equals(id)) {
+                    for (MuscleHeatmapView.MuscleGroup group : info.muscles.keySet()) {
+                        muscles.add(formatMuscleName(group));
+                    }
+                }
+            }
         }
+
+        List<String> sortedMuscles = new ArrayList<>(muscles);
+        Collections.sort(sortedMuscles);
+
+        // Compatible way to join strings
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < sortedMuscles.size(); i++) {
+            sb.append(sortedMuscles.get(i));
+            if (i < sortedMuscles.size() - 1) sb.append(" & ");
+        }
+        String result = sb.toString();
+        tvMuscleAnalysis.setText("Primary Focus: " + (result.isEmpty() ? "None" : result));
     }
 
-    private void setupRecyclerView(Map<String, List<WorkoutSet>> groups) {
-        rvExerciseDetails.setLayoutManager(new LinearLayoutManager(this));
-        rvExerciseDetails.setAdapter(new ExerciseGroupAdapter(groups));
+    private String formatMuscleName(MuscleHeatmapView.MuscleGroup group) {
+        String name = group.name().toLowerCase();
+        return name.substring(0, 1).toUpperCase() + name.substring(1);
     }
 
     private static class ExerciseGroupAdapter extends RecyclerView.Adapter<ExerciseGroupAdapter.ViewHolder> {
@@ -143,10 +202,9 @@ public class DailyReportActivity extends AppCompatActivity {
             List<WorkoutSet> sets = groups.get(cat);
             holder.tvTitle.setText(cat);
             holder.tvSetsCount.setText(sets.size() + (sets.size() == 1 ? " Set" : " Sets"));
-            
             int totalReps = 0;
             for (WorkoutSet s : sets) totalReps += s.getTotalReps();
-            holder.tvTotalReps.setText(totalReps + " Reps");
+            holder.tvTotalReps.setText(totalReps + " Total Reps");
 
             holder.llSetsContainer.removeAllViews();
             for (int i = 0; i < sets.size(); i++) {
@@ -155,14 +213,14 @@ public class DailyReportActivity extends AppCompatActivity {
                 ((TextView) setView.findViewById(R.id.tvSetNum)).setText("SET " + (i + 1));
                 
                 String repDetails;
-                if (cat.equals(RepCounter.CAT_BICEP_CURL)) {
+                if (set.getLeftReps() > 0 || set.getRightReps() > 0) {
                     repDetails = "L:" + set.getLeftReps() + " R:" + set.getRightReps();
                 } else {
                     repDetails = String.valueOf(set.getTotalReps());
                 }
+                
                 ((TextView) setView.findViewById(R.id.tvRepCount)).setText(repDetails);
                 ((TextView) setView.findViewById(R.id.tvDuration)).setText(set.getDurationMillis() / 1000 + "s");
-                
                 holder.llSetsContainer.addView(setView);
             }
         }

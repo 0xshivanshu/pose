@@ -5,14 +5,25 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class WorkoutSet implements Serializable {
-    private final String category;
-    private final Map<String, Integer> exerciseCounts;
-    private final long durationMillis;
+    private String exerciseId;
+    private String category;
+    private Map<String, Integer> exerciseCounts;
+    private long durationMillis;
 
-    public WorkoutSet(String category, Map<String, Integer> exerciseCounts, long durationMillis) {
+    // No-argument constructor for Firebase
+    public WorkoutSet() {
+        this.exerciseCounts = new HashMap<>();
+    }
+
+    public WorkoutSet(String exerciseId, String category, Map<String, Integer> exerciseCounts, long durationMillis) {
+        this.exerciseId = exerciseId;
         this.category = category;
         this.exerciseCounts = new HashMap<>(exerciseCounts);
         this.durationMillis = durationMillis;
+    }
+
+    public String getExerciseId() {
+        return exerciseId;
     }
 
     public String getCategory() {
@@ -28,17 +39,25 @@ public class WorkoutSet implements Serializable {
     }
 
     public int getLeftReps() {
-        return exerciseCounts.getOrDefault(RepCounter.BICEP_CURL_LEFT, 0);
+        for (Map.Entry<String, Integer> entry : exerciseCounts.entrySet()) {
+            if (entry.getKey().endsWith("(L)")) return entry.getValue();
+        }
+        return 0;
     }
 
     public int getRightReps() {
-        return exerciseCounts.getOrDefault(RepCounter.BICEP_CURL_RIGHT, 0);
+        for (Map.Entry<String, Integer> entry : exerciseCounts.entrySet()) {
+            if (entry.getKey().endsWith("(R)")) return entry.getValue();
+        }
+        return 0;
     }
 
     public int getTotalReps() {
         int total = 0;
-        for (int count : exerciseCounts.values()) {
-            total += count;
+        if (exerciseCounts != null) {
+            for (int count : exerciseCounts.values()) {
+                total += count;
+            }
         }
         return total;
     }
